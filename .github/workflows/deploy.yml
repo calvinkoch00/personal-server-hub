@@ -1,16 +1,34 @@
-name: Deploy Lambda to AWS
+name: Test & Deploy Lambda to AWS
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'lambda/**'
+      - 'aws_lambda/**'
+      - 'tests/**'
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Test Dependencies
+        run: pip install pytest
+
+      - name: Run Pytest
+        run: pytest tests/
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -24,11 +42,14 @@ jobs:
 
       - name: Package Lambda Function
         run: |
-          cd lambda
-          zip -r function.zip lambda_function.py
+          cd aws_lambda
+          zip -r ../function.zip .
+          cd ..
 
       - name: Deploy Code to AWS Lambda
         run: |
           aws lambda update-function-code \
             --function-name hetzner-server-controller \
-            --zip-file fileb://lambda/function.zip
+            --zip-file fileb://function.zip
+
+      

@@ -1,0 +1,6 @@
+{
+"python.analysis.extraPaths": [
+    "./aws_lambda"
+],
+"python-envs.defaultEnvManager": "ms-python.python:system"
+}
