@@ -7,12 +7,12 @@ AUTH_SECRET = os.environ.get("AUTH_SECRET")
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY")
 DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+DISCORD_STATUS_WEBHOOK_URL = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", "")
 
 DEFAULT_GAME = "minecraft"
 DEFAULT_LIFETIME_SECONDS = 300  # 5 Minuten Standard
 MAX_LIFETIME_SECONDS = 7 * 24 * 3600  # 7 Tage Max
 
-# Mapping: Spiel -> Volume-ID
 VOLUME_MAPPING = {
     "minecraft": os.environ.get("VOLUME_ID_MINECRAFT", os.environ.get("VOLUME_ID", "107045799")),
 }
@@ -66,6 +66,7 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
     return game, seconds, readable
 
 def get_cloud_init_script(max_seconds: int = 300, volume_id: int = 107045799) -> str:
+    webhook_url = DISCORD_STATUS_WEBHOOK_URL
     return f"""#cloud-config
 write_files:
   - path: /etc/systemd/system/minecraft-shutdown.service
@@ -81,8 +82,8 @@ write_files:
       Type=oneshot
       RemainAfterExit=true
       ExecStart=/bin/true
-      ExecStop=/bin/bash -c 'cd /mnt/gamespeicher && docker compose stop -t 30 && sync'
-      TimeoutStopSec=45
+      ExecStop=/bin/bash -c 'if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"💾 **Server stoppt:** Weltdaten werden gesichert...\\"}}" "{webhook_url}" || true; fi; cd /mnt/gamespeicher && docker compose stop -t 30 && sync; if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"🛑 **Offline:** Welt sicher gespeichert, Volume unmounted.\\"}}" "{webhook_url}" || true; fi'
+      TimeoutStopSec=60
 
       [Install]
       WantedBy=multi-user.target
@@ -108,10 +109,22 @@ write_files:
         cd /mnt/gamespeicher && docker compose up -d || true
       fi
 
+      # Server bereit Nachricht nach Discord senden
+      if [ -n "{webhook_url}" ]; then
+        curl -s -H "Content-Type: application/json" -X POST \
+          -d '{{"content": "🟢 **Minecraft-Server ist bereit!** Verbinde dich über `mc.calvinkoch.ch`."}}' \
+          "{webhook_url}" || true
+      fi
+
       # Auto-Shutdown nach Ablauf der Zeit
       sleep {max_seconds}
+      if [ -n "{webhook_url}" ]; then
+        curl -s -H "Content-Type: application/json" -X POST \
+          -d '{{"content": "⏳ **Auto-Shutdown erreicht.** Server fährt herunter..."}}' \
+          "{webhook_url}" || true
+      fi
+
       SERVER_ID=$(curl -s http://169.254.169.254/hetzner/v1/metadata/instance-id)
-      # Initiiert sauberen Shutdown über Hetzner Actions API
       curl -s -X POST -H "Authorization: Bearer {HETZNER_API_TOKEN}" "https://api.hetzner.cloud/v1/servers/$SERVER_ID/actions/shutdown"
 
 runcmd:
