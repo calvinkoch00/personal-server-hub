@@ -1,27 +1,32 @@
+
 # On-Demand Gaming & Workload Server Hub
 
-Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und automatischen Terminierung von Gameservern in der Hetzner Cloud – gesteuert via Discord Slash-Commands oder REST-API über AWS Lambda.
+Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und automatischen Terminierung von Gameservern in der Hetzner Cloud – gesteuert via Discord Slash-Commands oder REST-API über AWS CloudFront & AWS Lambda.
 
 ---
 
 ## Architektur-Übersicht
 
 ```
-
 ┌──────────────────────────────────────────────────────────┐
-│                       Interfaces                         │
-│   Discord Slash Commands              REST Clients / SPA │
+│                        Interfaces                        │
+│   Discord Slash Commands             REST Clients / SPA  │
 └─────────────┬─────────────────────────────────┬──────────┘
-│ (Ed25519 Signature)             │ (x-auth-token)
-▼                                 ▼
+              │ (Ed25519 Signature)             │ (x-auth-token)
+              ▼                                 ▼
 ┌──────────────────────────────────────────────────────────┐
-│              AWS Lambda Control Plane                    │
+│       api.calvinkoch.ch (AWS CloudFront CDN / SSL)       │
+└─────────────────────────────┬────────────────────────────┘
+                              │ HTTPS Origin Request
+                              ▼
+┌──────────────────────────────────────────────────────────┐
+│                 AWS Lambda Control Plane                 │
 │  • Discord Interaktions-Handler (Ping / Command ACK)     │
-│  • Dynamischer Help-Inspector via Discord API            │
+│  • Lokaler Command-Cache & dynamischer Help-Inspector    │
 │  • Laufzeit-Parser & Hetzner API Client                  │
-└───────────────────────────┬──────────────────────────────┘
-│ Hetzner Cloud API (HTTPS)
-▼
+└─────────────────────────────┬────────────────────────────┘
+                              │ Hetzner Cloud API (HTTPS)
+                              ▼
 ┌──────────────────────────────────────────────────────────┐
 │               Hetzner Cloud Infrastructure               │
 │  ┌────────────────────────┐    ┌──────────────────────┐  │
@@ -34,9 +39,11 @@ Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und
 │  └────────────────────────┘
 ```
 
+
+- **Custom Domain & CDN:** `api.calvinkoch.ch` via AWS CloudFront mit automatischer SSL-Terminierung (`us-east-1` ACM) und Weiterleitung an die Lambda-Funktion in Frankfurt (`eu-central-1`).
 - **Storage:** Persistentes Hetzner Cloud Volume (`game-data`, EXT4), das Spielstände, Konfigurationen und Docker-Compose-Dateien dauerhaft speichert.
 - **Compute:** Ephemere Hetzner Cloud VMs (Standard: `CPX32`, 4 vCPUs, 8 GB RAM), die nur für die Spieldauer provisioniert und stundengenau abgerechnet werden.
-- **Control Plane:** AWS Lambda Function URL zur Verarbeitung von Discord-Interaktionen und REST-Requests.
+- **Control Plane:** Serverlose AWS Lambda Function URL zur Verarbeitung von Discord-Interaktionen und REST-Requests.
 - **Automatischer Shutdown:** Unabhängiger `systemd`-Service (`server-autokill`), der nach Ablauf des gewählten Zeitfensters (Standard: 5 Minuten, Maximal: 7 Tage) die eigene Server-Instanz über die Hetzner API terminiert. Das Volume wird dabei automatisch getrennt und bleibt erhalten.
 
 ---
@@ -50,7 +57,7 @@ Der Bot reagiert direkt auf Slash-Befehle im Server:
 | `/start`  | `args` *(optional)* | Startet einen Server. Erkennt Spieltyp und Zeitdauer modular im Freitext. Standard:`minecraft` mit 5 Minuten Laufzeit. |
 | `/status` | *keine*               | Listet alle aktiven Server samt IP-Adresse, Instanz-ID und Hardware-Status auf.                                          |
 | `/stop`   | *keine*               | Terminiert die aktuell laufende Instanz sofort und unmounted das Volume sicher.                                          |
-| `/help`   | *keine*               | Fragt live registrierte Befehle von der Discord API ab und zeigt eine dynamische Übersicht.                             |
+| `/help`   | *keine*               | Liefert eine formatierte Übersicht aller registrierten Befehle und REST-Endpunkte.                                      |
 
 ### Syntax-Beispiele für `/start`:
 
@@ -64,7 +71,7 @@ Der Bot reagiert direkt auf Slash-Befehle im Server:
 
 ## REST Control Plane API
 
-Die AWS Lambda Function URL stellt parallel eine vollwertige REST-Schnittstelle bereit.
+Die Control Plane ist weltweit unter **`https://api.calvinkoch.ch`** erreichbar.
 
 ### Authentifizierung
 
@@ -84,6 +91,7 @@ Jeder reguläre API-Aufruf (außer Discord-Webhooks, die über Ed25519 signiert 
 Erstellt eine Hetzner-VM, mountet das Volume `game-data`, startet Docker Compose und plant den Selbstlöschungs-Timer ein.
 
 - **Methoden & Pfade:** `POST /start` oder `POST /` mit Body `{"action": "start"}`
+- **URL:** `https://api.calvinkoch.ch/start`
 - **Headers:** `x-auth-token: <AUTH_SECRET>`
 
 **Request Body (optional):**
@@ -113,6 +121,7 @@ Erstellt eine Hetzner-VM, mountet das Volume `game-data`, startet Docker Compose
     "lifetime_readable": "2 Stunde(n)"
   }
 }
+
 ```
 
 ---
@@ -125,6 +134,7 @@ Ermittelt den aktuellen Betriebszustand und die IP-Adresse einer bestimmten Inst
 * `GET /status?server_id=<SERVER_ID>`
 * `POST /status` mit Body `{"server_id": "<SERVER_ID>"}`
 * `POST /` mit Body `{"action": "status", "server_id": "<SERVER_ID>"}`
+* **URL:** `https://api.calvinkoch.ch/status`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
 **Response (`200 OK`):**
@@ -137,6 +147,7 @@ Ermittelt den aktuellen Betriebszustand und die IP-Adresse einer bestimmten Inst
     "ip": "2.28.203.66"
   }
 }
+
 ```
 
 ---
@@ -146,6 +157,7 @@ Ermittelt den aktuellen Betriebszustand und die IP-Adresse einer bestimmten Inst
 Liefert alle derzeit laufenden Instanzen des Hetzner-Projekts zurück.
 
 * **Methoden & Pfade:** `GET /servers`, `POST /servers`, oder `POST /` mit Body `{"action": "list"}`
+* **URL:** `https://api.calvinkoch.ch/servers`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
 **Response (`200 OK`):**
@@ -163,6 +175,7 @@ Liefert alle derzeit laufenden Instanzen des Hetzner-Projekts zurück.
     }
   ]
 }
+
 ```
 
 ---
@@ -172,6 +185,7 @@ Liefert alle derzeit laufenden Instanzen des Hetzner-Projekts zurück.
 Terminiert den Server vorzeitig. Das Volume wird automatisch freigegeben und bleibt unversehrt.
 
 * **Methoden & Pfade:** `POST /stop` oder `POST /` mit Body `{"action": "stop", "server_id": "<SERVER_ID>"}`
+* **URL:** `https://api.calvinkoch.ch/stop`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
 **Request Body:**
@@ -180,6 +194,7 @@ Terminiert den Server vorzeitig. Das Volume wird automatisch freigegeben und ble
 {
   "server_id": 168873929
 }
+
 ```
 
 **Response (`200 OK`):**
@@ -195,14 +210,42 @@ Terminiert den Server vorzeitig. Das Volume wird automatisch freigegeben und ble
     }
   }
 }
+
 ```
 
 ---
 
-#### 5. CORS Preflight
+#### 5. Hilfe & Befehlsübersicht abfragen
+
+Liefert die formatierte Übersicht aller verfügbaren Befehle und Endpunkte.
+
+* **Methoden & Pfade:** `GET /help`, `POST /help`, oder `POST /` mit Body `{"action": "help"}`
+* **URL:** `https://api.calvinkoch.ch/help`
+* **Headers:** `x-auth-token: <AUTH_SECRET>`
+
+**Response (`200 OK`):**
+
+```json
+{
+  "message": "Befehlsübersicht",
+  "help": "📖 **Verfügbare Server-Befehle:**\n• `/help` — Zeigt alle Befehle und Beispiele an\n• `/start [args]` — Startet Server (z. B. '/start', '/start 2h' oder '/start csgo 1d')\n• `/status` — Zeigt alle aktiven Server an\n• `/stop` — Stoppt den laufenden Gameserver\n\n💡 *Beispiele für `/start`:*\n• `/start` *(Minecraft, 5 Minuten)*\n• `/start 2h` *(Minecraft, 2 Stunden)*\n• `/start csgo 1d` *(CS:GO, 1 Tag, max. 7d)*",
+  "endpoints": [
+    {"path": "POST /start", "description": "Startet Server (Body: game, duration, server_type)"},
+    {"path": "GET /status?server_id=<id>", "description": "Status einer spezifischen Instanz"},
+    {"path": "GET /servers", "description": "Liste aller aktiven Instanzen"},
+    {"path": "POST /stop", "description": "Löscht Server (Body: server_id)"},
+    {"path": "GET /help", "description": "Zeigt diese Hilfeübersicht"}
+  ]
+}
+
+```
+
+---
+
+#### 6. CORS Preflight
 
 * **Methode & Pfad:** `OPTIONS /*`
-* **Response (`200 OK`):** Sendet CORS-Header (`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers: *`) für Browser-Clients zurück.
+* **Response (`200 OK`):** Sendet CORS-Header (`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers: *`) für Web-Frontends/SPAs zurück.
 
 ---
 
@@ -218,47 +261,24 @@ Terminiert den Server vorzeitig. Das Volume wird automatisch freigegeben und ble
 
 ---
 
-
-
-### 6. Hilfe & Befehlsübersicht abfragen
-
-Liefert die aktuelle Übersicht aller registrierten Discord-Befehle (live über die Discord API synchronisiert) sowie alle verfügbaren REST-Endpunkte.
-
-- **Methoden & Pfade:**
-  - `GET /help`
-  - `POST /help`
-  - `POST /` mit Body `{"action": "help"}`
-- **Headers:** `x-auth-token: <AUTH_SECRET>`
-
-#### Response (`200 OK`)
-
-```json
-{
-  "message": "Befehlsübersicht",
-  "help": "📖 **Verfügbare Server-Befehle:**\n• `/help` — Zeigt alle Befehle und Beispiele an\n• `/start [args]` — Startet Server (z. B. '/start', '/start 2h' oder '/start csgo 1d')\n• `/status` — Zeigt alle aktiven Server an\n• `/stop` — Stoppt den laufenden Gameserver\n\n💡 *Beispiele für `/start`:*\n• `/start` *(Minecraft, 5 Minuten)*\n• `/start 2h` *(Minecraft, 2 Stunden)*\n• `/start csgo 1d` *(CS:GO, 1 Tag, max. 7d)*",
-  "endpoints": [
-    {"path": "POST /start", "description": "Startet Server (Body: game, duration, server_type)"},
-    {"path": "GET /status?server_id=<id>", "description": "Status einer spezifischen Instanz"},
-    {"path": "GET /servers", "description": "Liste aller aktiven Instanzen"},
-    {"path": "POST /stop", "description": "Löscht Server (Body: server_id)"},
-    {"path": "GET /help", "description": "Zeigt diese Hilfeübersicht"}
-  ]
-}
-```
-
 ## Setup & Deployment
 
 ### 1. Lokales Setup
 
+Das beiliegende Setup-Skript richtet automatisch die Python-Umgebung (`.venv`) und VS Code ein:
+
 ```bash
 git clone <repo-url>
 cd personal-server-hub
-cp .env.example .env
+chmod +x setup_env.sh
+./setup_env.sh
+
 ```
 
-Passe die Werte in `.env` an:
+Erstelle eine `.env`-Datei für lokale Tests:
 
 ```env
+API_BASE_URL=[https://api.calvinkoch.ch](https://api.calvinkoch.ch)
 HETZNER_API_TOKEN=dein_hetzner_token
 VOLUME_ID=107045799
 VOLUME_NAME=game-data
@@ -267,20 +287,22 @@ AUTH_SECRET=dein_api_secret
 DISCORD_PUBLIC_KEY=dein_discord_public_key
 DISCORD_APPLICATION_ID=deine_discord_app_id
 DISCORD_BOT_TOKEN=dein_discord_bot_token
+
 ```
 
 ### 2. GitHub Secrets hinterlegen
 
-Folgende Secrets unter **Settings** → **Secrets and variables** → **Actions** eintragen:
+Unter **Settings** → **Secrets and variables** → **Actions** eintragen:
 
 * `AWS_ACCESS_KEY_ID`
 * `AWS_SECRET_ACCESS_KEY`
+* `LAMBDA_FUNCTION_URL` (Deine Function URL oder `https://api.calvinkoch.ch`)
 * `DISCORD_APPLICATION_ID`
 * `DISCORD_BOT_TOKEN`
 
 ### 3. AWS Lambda Umgebungsvariablen
 
-In der AWS-Konsole unter der Lambda-Funktion (**Configuration** → **Environment variables**) hinterlegen:
+In der AWS-Konsole unter der Lambda-Funktion (**Configuration** → **Environment variables**):
 
 * `HETZNER_API_TOKEN`
 * `VOLUME_ID`
@@ -291,16 +313,8 @@ In der AWS-Konsole unter der Lambda-Funktion (**Configuration** → **Environmen
 
 ### 4. Discord Bot Konfiguration
 
-1. Bot im [Discord Developer Portal](https://www.google.com/search?q=https://discord.com/developers/applications) erstellen.
-2. Berechtigungen vergeben (`bot`, `applications.commands`).
-3. Unter **General Information** die **Interactions Endpoint URL** auf die AWS Lambda Function URL setzen.
-4. Slash Commands registrieren:
-
-```bash
-python3 scripts/register_discord_commands.py
-```
-
-*(Erfolgt künftig automatisch via GitHub Actions, sobald `scripts/register_discord_commands.py` geändert wird).*
-
-```
-```
+1. Applikation im [Discord Developer Portal](https://www.google.com/search?q=https://discord.com/developers/applications) öffnen.
+2. Unter **General Information** die **Interactions Endpoint URL** setzen auf:
+   [https://api.calvinkoch.ch](https://api.calvinkoch.ch)
+3. Discord speichert und validiert die URL sofort per PING-Request (`200 OK`).
+4. Slash-Befehle werden bei jedem Deployment über GitHub Actions automatisch synchronisiert (oder manuell via `python3 scripts/register_discord_commands.py`).
