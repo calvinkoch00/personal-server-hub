@@ -3,6 +3,7 @@ import urllib.request
 from auth import is_authorized, verify_discord_signature
 from config import parse_start_args, DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN
 import hetzner
+import os
 
 def build_response(status_code: int, body: dict) -> dict:
     return {
@@ -16,42 +17,22 @@ def build_response(status_code: int, body: dict) -> dict:
     }
 
 def get_registered_discord_commands() -> str:
-    """Holt die aktuell registrierten Commands dynamisch von der Discord API ab."""
-    if not DISCORD_APPLICATION_ID or not DISCORD_BOT_TOKEN:
-        return "⚠️ Bot-Credentials nicht vollständig konfiguriert."
+    cache_path = os.path.join(os.path.dirname(__file__), "commands_cache.txt")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            pass
 
-    url = f"https://discord.com/api/v10/applications/{DISCORD_APPLICATION_ID}/commands"
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
-        method="GET"
+    # Fallback falls die Cache-Datei nicht existiert
+    return (
+        "📖 **Verfügbare Server-Befehle:**\n\n"
+        "• `/start [args]` — Startet einen Gameserver on demand\n"
+        "• `/status` — Zeigt alle aktiven Server samt IP an\n"
+        "• `/stop` — Stoppt und löscht den laufenden Server\n"
+        "• `/help` — Zeigt alle Befehle und Beispiele an"
     )
-
-    try:
-        with urllib.request.urlopen(req) as resp:
-            commands = json.loads(resp.read().decode("utf-8"))
-
-        lines = ["📖 **Verfügbare Server-Befehle:**\n"]
-        for cmd in sorted(commands, key=lambda x: x["name"]):
-            name = cmd.get("name")
-            desc = cmd.get("description", "")
-            opts = cmd.get("options", [])
-
-            opt_str = ""
-            if opts:
-                opt_names = [f"[{o['name']}]" if not o.get("required") else f"<{o['name']}>" for o in opts]
-                opt_str = " " + " ".join(opt_names)
-
-            lines.append(f"• `/{name}{opt_str}` — {desc}")
-
-        lines.append("\n💡 *Beispiele für `/start`:*\n"
-                     "• `/start` *(Minecraft, 5 Minuten)*\n"
-                     "• `/start 2h` *(Minecraft, 2 Stunden)*\n"
-                     "• `/start csgo 1d` *(CS:GO, 1 Tag, max. 7d)*")
-
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Fehler beim Abrufen der Befehle: {e}"
 
 def handle_discord_interaction(body: dict) -> dict:
     interaction_type = body.get("type")

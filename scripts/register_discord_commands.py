@@ -30,7 +30,7 @@ commands = [
         "description": "Startet Server (z. B. '/start', '/start 2h' oder '/start csgo 1d')",
         "options": [
             {
-                "type": 3,  # STRING
+                "type": 3,
                 "name": "args",
                 "description": "Optional: z. B. '2h', 'csgo' oder 'csgo 3d' (Standard: minecraft 5m)",
                 "required": False
@@ -66,7 +66,38 @@ req = urllib.request.Request(
 try:
     with urllib.request.urlopen(req) as resp:
         print("Erfolgreich bei Discord registriert! Status:", resp.status)
-        print(resp.read().decode())
+        registered = json.loads(resp.read().decode())
+        
+        # Generiere dynamisch den Cache-Text basierend auf den registrierten Commands
+        lines = ["📖 **Verfügbare Server-Befehle:**\n"]
+        for cmd in sorted(registered, key=lambda x: x["name"]):
+            name = cmd.get("name")
+            desc = cmd.get("description", "")
+            opts = cmd.get("options", [])
+            opt_str = ""
+            if opts:
+                opt_names = [f"[{o['name']}]" if not o.get("required") else f"<{o['name']}>" for o in opts]
+                opt_str = " " + " ".join(opt_names)
+            lines.append(f"• `/{name}{opt_str}` — {desc}")
+
+        lines.append(
+            "\n💡 **Beispiele für `/start`:**\n"
+            "• `/start` *(Minecraft, 5 Minuten Testlauf)*\n"
+            "• `/start args: 2h` *(Minecraft, 2 Stunden)*\n"
+            "• `/start args: 30m` *(Minecraft, 30 Minuten)*\n"
+            "• `/start args: csgo 1d` *(CS:GO, 1 Tag, max. 7d)*"
+        )
+        cache_content = "\n".join(lines)
+
+        # Schreibe die Cache-Datei direkt in den aws_lambda Ordner
+        cache_path = os.path.join(os.path.dirname(__file__), "..", "aws_lambda", "commands_cache.txt")
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write(cache_content)
+        print(f"Befehls-Cache erfolgreich aktualisiert unter: {cache_path}")
+
 except urllib.error.HTTPError as e:
     print(f"HTTP Error {e.code}: {e.read().decode()}")
+    exit(1)
+except Exception as e:
+    print("Fehler:", e)
     exit(1)
