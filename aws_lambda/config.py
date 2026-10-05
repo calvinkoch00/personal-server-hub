@@ -68,22 +68,52 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
 def get_cloud_init_script(max_seconds: int = 300, volume_id: int = 107045799) -> str:
     return f"""#cloud-config
 write_files:
+  - path: /etc/systemd/system/minecraft-shutdown.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Graceful Minecraft Docker Stop on Shutdown
+      DefaultDependencies=no
+      Before=shutdown.target reboot.target halt.target umount.target
+      RequiresMountsFor=/mnt/gamespeicher
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/bin/true
+      ExecStop=/bin/bash -c 'cd /mnt/gamespeicher && docker compose stop -t 30 && sync'
+      TimeoutStopSec=45
+
+      [Install]
+      WantedBy=multi-user.target
+
   - path: /root/autostart.sh
     permissions: '0755'
     content: |
       #!/bin/bash
+      set -e
+
       if ! command -v docker &> /dev/null; then
         curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
         sh /tmp/get-docker.sh
       fi
+
       mkdir -p /mnt/gamespeicher
       mount -o discard,defaults /dev/disk/by-id/scsi-0HC_Volume_{volume_id} /mnt/gamespeicher || true
+
+      systemctl daemon-reload
+      systemctl enable --now minecraft-shutdown.service
+
       if [ -d /mnt/gamespeicher ]; then
         cd /mnt/gamespeicher && docker compose up -d || true
       fi
+
+      # Auto-Shutdown nach Ablauf der Zeit
       sleep {max_seconds}
       SERVER_ID=$(curl -s http://169.254.169.254/hetzner/v1/metadata/instance-id)
-      curl -s -X DELETE -H "Authorization: Bearer {HETZNER_API_TOKEN}" "https://api.hetzner.cloud/v1/servers/$SERVER_ID"
+      # Initiiert sauberen Shutdown über Hetzner Actions API
+      curl -s -X POST -H "Authorization: Bearer {HETZNER_API_TOKEN}" "https://api.hetzner.cloud/v1/servers/$SERVER_ID/actions/shutdown"
+
 runcmd:
   - systemd-run --unit=server-autokill /root/autostart.sh
 """

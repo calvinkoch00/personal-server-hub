@@ -61,8 +61,11 @@ def handle_discord_interaction(body: dict) -> dict:
                 msg = "⚪ Kein laufender Server zum Stoppen vorhanden."
             else:
                 target = servers[0]
-                hetzner.delete_server(str(target["server_id"]))
-                msg = f"🛑 Server `{target['name']}` (ID: {target['server_id']}) wird heruntergefahren."
+                hetzner.shutdown_server(str(target["server_id"]))
+                msg = (
+                    f"🛑 Server `{target['name']}` (ID: {target['server_id']}) fährt jetzt herunter.\n"
+                    f"💾 *Minecraft speichert die Welt sauber ab, trennt das Volume und schaltet ab.*"
+                )
 
         elif command_name == "start":
             options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}

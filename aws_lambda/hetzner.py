@@ -119,6 +119,12 @@ def list_servers() -> list:
         })
     return results
 
+def shutdown_server(server_id: str) -> dict:
+    """Sendet ein ACPI-Shutdown-Signal an die VM, damit systemd alle Dienste sauber stoppt."""
+    res = _request(f"servers/{server_id}/actions/shutdown", method="POST")
+    return {"message": "Server fährt sauber herunter", "action": res.get("action")}
+
 def delete_server(server_id: str) -> dict:
+    """Löscht die VM sofort hart."""
     res = _request(f"servers/{server_id}", method="DELETE")
     return {"message": "Server wird gelöscht", "action": res.get("action")}
