@@ -1,7 +1,13 @@
 import json
 import urllib.request
 import urllib.error
-from config import HETZNER_API_TOKEN, VOLUME_ID, LOCATION, get_cloud_init_script, MAX_LIFETIME_SECONDS
+from config import (
+    HETZNER_API_TOKEN,
+    VOLUME_ID,
+    LOCATION,
+    parse_duration_to_seconds,
+    get_cloud_init_script
+)
 
 BASE_URL = "https://api.hetzner.cloud/v1"
 
@@ -19,24 +25,34 @@ def _request(endpoint: str, method: str = "GET", data: dict = None) -> dict:
         content = resp.read().decode("utf-8")
         return json.loads(content) if content else {}
 
-def create_server(server_type: str = "cpx32") -> dict:
+def create_server(game: str = "minecraft", duration: str = None, server_type: str = "cpx32") -> dict:
+    game_clean = (game or "minecraft").strip().lower()
+    seconds, human_readable = parse_duration_to_seconds(duration)
+
+    server_name = f"{game_clean}-ondemand"
+
     payload = {
-        "name": "minecraft-ondemand",
+        "name": server_name,
         "server_type": server_type,
         "image": "ubuntu-24.04",
         "location": LOCATION,
         "start_after_create": True,
         "volumes": [int(VOLUME_ID)],
-        "user_data": get_cloud_init_script(max_seconds=MAX_LIFETIME_SECONDS)
+        "ssh_keys": ["calvin-macbook"],  # Dein SSH-Key
+        "user_data": get_cloud_init_script(max_seconds=seconds, game=game_clean)
     }
+
     res = _request("/servers", method="POST", data=payload)
     server = res.get("server", {})
     return {
         "server_id": server.get("id"),
+        "name": server.get("name"),
         "status": server.get("status"),
         "ip": server.get("public_net", {}).get("ipv4", {}).get("ip"),
+        "game": game_clean,
         "server_type": server_type,
-        "auto_kill_after_seconds": MAX_LIFETIME_SECONDS
+        "lifetime_seconds": seconds,
+        "lifetime_readable": human_readable
     }
 
 def get_server_status(server_id: str) -> dict:
