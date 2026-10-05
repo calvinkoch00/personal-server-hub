@@ -24,9 +24,13 @@ def _request(endpoint: str, method: str = "GET", data: dict = None) -> dict:
         "Content-Type": "application/json"
     }
     req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
-    with urllib.request.urlopen(req) as resp:
-        content = resp.read().decode("utf-8")
-        return json.loads(content) if content else {}
+    try:
+        with urllib.request.urlopen(req) as resp:
+            content = resp.read().decode("utf-8")
+            return json.loads(content) if content else {}
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8") if e.fp else ""
+        raise RuntimeError(f"Hetzner API {e.code}: {err_body}")
 
 def update_godaddy_dns(ip: str):
     """Aktualisiert den A-Record bei GoDaddy auf die neue Server-IP."""
@@ -67,7 +71,7 @@ def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = 
         "location": LOCATION,
         "start_after_create": True,
         "volumes": [volume_id],
-        "ssh_keys": ["calvin-macbook"],
+        "ssh_keys": ["macbook-pro"],
         "user_data": get_cloud_init_script(max_seconds=seconds, volume_id=volume_id)
     }
 
