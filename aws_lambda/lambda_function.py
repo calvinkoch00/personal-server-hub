@@ -1,8 +1,7 @@
 import os
 import json
-import urllib.request
 from auth import is_authorized, verify_discord_signature
-from config import parse_start_args, DISCORD_APPLICATION_ID
+from config import parse_start_args
 import hetzner
 
 def build_response(status_code: int, body: dict) -> dict:
@@ -33,22 +32,6 @@ def get_registered_discord_commands() -> str:
         "• `/help` — Zeigt diese Übersicht an"
     )
 
-def send_discord_followup(token: str, message: str):
-    """Sendet die Nachricht nachträglich an Discord nach einer Deferred Response."""
-    app_id = DISCORD_APPLICATION_ID or os.environ.get("DISCORD_APPLICATION_ID")
-    url = f"https://discord.com/api/v10/webhooks/{app_id}/{token}/messages/@original"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"content": message}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="PATCH"
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            pass
-    except Exception as e:
-        print(f"Fehler beim Senden des Discord Followups: {e}")
-
 def handle_discord_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
 
@@ -60,27 +43,19 @@ def handle_discord_interaction(body: dict) -> dict:
     if interaction_type == 2:
         data = body.get("data", {})
         command_name = data.get("name")
-        interaction_token = body.get("token")
 
         if command_name == "help":
-            return build_response(200, {
-                "type": 4,
-                "data": {"content": get_registered_discord_commands()}
-            })
+            msg = get_registered_discord_commands()
 
-        if command_name == "status":
+        elif command_name == "status":
             servers = hetzner.list_servers()
             if not servers:
                 msg = "⚪ Es läuft aktuell kein Server."
             else:
                 lines = [f"• `{s['name']}` (ID: {s['server_id']}) - Status: `{s['status']}` - IP: `{s['ip']}`" for s in servers]
                 msg = "🟢 **Aktive Server:**\n" + "\n".join(lines)
-            return build_response(200, {
-                "type": 4,
-                "data": {"content": msg}
-            })
 
-        if command_name == "stop":
+        elif command_name == "stop":
             servers = hetzner.list_servers()
             if not servers:
                 msg = "⚪ Kein laufender Server zum Stoppen vorhanden."
@@ -88,12 +63,8 @@ def handle_discord_interaction(body: dict) -> dict:
                 target = servers[0]
                 hetzner.delete_server(str(target["server_id"]))
                 msg = f"🛑 Server `{target['name']}` (ID: {target['server_id']}) wird heruntergefahren."
-            return build_response(200, {
-                "type": 4,
-                "data": {"content": msg}
-            })
 
-        if command_name == "start":
+        elif command_name == "start":
             options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
             raw_input = options.get("args")
             game, seconds, readable = parse_start_args(raw_input)
@@ -115,16 +86,13 @@ def handle_discord_interaction(body: dict) -> dict:
             except Exception as e:
                 msg = f"❌ Fehler beim Starten des Servers: {e}"
 
-            # Nachträgliche Nachricht via Discord API Webhook senden
-            if interaction_token:
-                send_discord_followup(interaction_token, msg)
+        else:
+            msg = f"Unbekannter Befehl: `/{command_name}`"
 
-            # Sofortige Rückmeldung binnen weniger Millisekunden
-            return build_response(200, {"type": 5})
-
+        # Direkte Antwort mit Type 4 (in einem einzigen HTTP-Turn)
         return build_response(200, {
             "type": 4,
-            "data": {"content": f"Unbekannter Befehl: `/{command_name}`"}
+            "data": {"content": msg}
         })
 
     return build_response(400, {"error": "Unbekannter Interaktions-Typ"})

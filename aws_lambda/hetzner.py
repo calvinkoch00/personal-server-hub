@@ -47,10 +47,10 @@ def update_godaddy_dns(ip: str):
         method="PUT"
     )
     try:
-        with urllib.request.urlopen(req) as resp:
-            print(f"GoDaddy DNS erfolgreich aktualisiert: {GODADDY_SUBDOMAIN}.{GODADDY_DOMAIN} -> {ip} (Status {resp.status})")
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            print(f"GoDaddy DNS aktualisiert (Status {resp.status})")
     except Exception as e:
-        print(f"Fehler beim Aktualisieren des GoDaddy DNS: {e}")
+        print(f"GoDaddy DNS Timeout/Fehler (nicht blockierend): {e}")
 
 def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = "5 Minute(n)", server_type: str = "cpx32") -> dict:
     volume_info = get_volume_for_game(game)
