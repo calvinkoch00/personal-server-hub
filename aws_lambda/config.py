@@ -6,25 +6,23 @@ VOLUME_ID = os.environ.get("VOLUME_ID", "107045799")
 LOCATION = os.environ.get("LOCATION", "nbg1")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
-DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID", "")
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 
-DEFAULT_LIFETIME_SECONDS = 300
+DEFAULT_GAME = "minecraft"
+DEFAULT_LIFETIME_SECONDS = 300  # 5 Minuten
 MAX_LIFETIME_SECONDS = 7 * 24 * 3600  # 7 Tage
 
 def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
     """
-    Erkennt Formate wie:
+    Erkennt Eingaben wie:
       - "" -> ('minecraft', 300, '5 Minuten')
       - "2h" -> ('minecraft', 7200, '2 Stunde(n)')
-      - "csgo" -> ('csgo', 300, '5 Minuten')
-      - "csgo 3d" -> ('csgo', 259200, '3 Tag(e)')
+      - "valheim 3d" -> ('valheim', 259200, '3 Tag(e)')
     """
     if not raw_input or not raw_input.strip():
-        return "minecraft", DEFAULT_LIFETIME_SECONDS, "5 Minuten"
+        return DEFAULT_GAME, DEFAULT_LIFETIME_SECONDS, "5 Minuten"
 
     parts = raw_input.strip().lower().split()
-    game = "minecraft"
+    game = DEFAULT_GAME
     duration_str = None
 
     for part in parts:
@@ -33,7 +31,6 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
         else:
             game = part
 
-    # Duration parsen
     if not duration_str:
         return game, DEFAULT_LIFETIME_SECONDS, "5 Minuten"
 
@@ -47,19 +44,22 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
     elif unit == "d":
         seconds = val * 86400
         readable = f"{val} Tag(e)"
-    else:
+    else:  # 'h'
         seconds = val * 3600
         readable = f"{val} Stunde(n)"
 
     if seconds > MAX_LIFETIME_SECONDS:
-        seconds, readable = MAX_LIFETIME_SECONDS, "7 Tage (Maximum)"
-    elif seconds < 60:
-        seconds, readable = 60, "1 Minute (Minimum)"
+        return game, MAX_LIFETIME_SECONDS, "7 Tage (Maximum)"
+    if seconds < 60:
+        return game, 60, "1 Minute (Minimum)"
 
     return game, seconds, readable
 
 def get_cloud_init_script(max_seconds: int = 300, game: str = "minecraft") -> str:
-    docker_dir = f"/mnt/gamespeicher/{game}" if game != "minecraft" else "/mnt/gamespeicher"
+    # Verzeichnisstruktur auf dem persistenten Volume:
+    # Standard: /mnt/gamespeicher (Minecraft)
+    # Zukünftige Games: /mnt/gamespeicher/<game>
+    docker_dir = f"/mnt/gamespeicher/{game}" if game != DEFAULT_GAME else "/mnt/gamespeicher"
 
     return f"""#cloud-config
 write_files:
@@ -71,6 +71,8 @@ write_files:
       mount -o discard,defaults /dev/disk/by-id/scsi-0HC_Volume_{VOLUME_ID} /mnt/gamespeicher || true
       if [ -d "{docker_dir}" ]; then
         cd {docker_dir} && docker compose up -d || true
+      elif [ -d "/mnt/gamespeicher" ]; then
+        cd /mnt/gamespeicher && docker compose up -d || true
       fi
       sleep {max_seconds}
       SERVER_ID=$(curl -s http://169.254.169.254/hetzner/v1/metadata/instance-id)

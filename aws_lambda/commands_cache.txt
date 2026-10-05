@@ -1,12 +1,12 @@
 📖 **Verfügbare Server-Befehle:**
 
 • `/help` — Zeigt alle Befehle und Beispiele an
-• `/start [args]` — Startet Server (z. B. '/start', '/start 2h' oder '/start csgo 1d')
+• `/start [args]` — Startet Server on demand (z. B. '/start' oder '/start 2h')
 • `/status` — Zeigt alle aktiven Server an
 • `/stop` — Stoppt den laufenden Gameserver
 
 💡 **Beispiele für `/start`:**
-• `/start` *(Minecraft, 5 Minuten Testlauf)*
+• `/start` *(Minecraft, 5 Minuten)*
 • `/start args: 2h` *(Minecraft, 2 Stunden)*
-• `/start args: 30m` *(Minecraft, 30 Minuten)*
-• `/start args: csgo 1d` *(CS:GO, 1 Tag, max. 7d)*
+• `/start args: 3d` *(Minecraft, 3 Tage, max. 7d)*
+• `/start args: <spiel> 4h` *(Anderes Spiel aus dem Speicher)*

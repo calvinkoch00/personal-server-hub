@@ -5,7 +5,6 @@ from config import (
     HETZNER_API_TOKEN,
     VOLUME_ID,
     LOCATION,
-    parse_duration_to_seconds,
     get_cloud_init_script
 )
 
@@ -26,7 +25,8 @@ def _request(endpoint: str, method: str = "GET", data: dict = None) -> dict:
         return json.loads(content) if content else {}
 
 def create_server(game: str = "minecraft", seconds: int = 300, readable: str = "5 Minuten", server_type: str = "cpx32") -> dict:
-    server_name = f"{game}-ondemand"
+    game_clean = (game or "minecraft").strip().lower()
+    server_name = f"{game_clean}-ondemand"
 
     payload = {
         "name": server_name,
@@ -36,7 +36,7 @@ def create_server(game: str = "minecraft", seconds: int = 300, readable: str = "
         "start_after_create": True,
         "volumes": [int(VOLUME_ID)],
         "ssh_keys": ["calvin-macbook"],
-        "user_data": get_cloud_init_script(max_seconds=seconds, game=game)
+        "user_data": get_cloud_init_script(max_seconds=seconds, game=game_clean)
     }
 
     res = _request("/servers", method="POST", data=payload)
@@ -46,7 +46,7 @@ def create_server(game: str = "minecraft", seconds: int = 300, readable: str = "
         "name": server.get("name"),
         "status": server.get("status"),
         "ip": server.get("public_net", {}).get("ipv4", {}).get("ip"),
-        "game": game,
+        "game": game_clean,
         "server_type": server_type,
         "lifetime_seconds": seconds,
         "lifetime_readable": readable

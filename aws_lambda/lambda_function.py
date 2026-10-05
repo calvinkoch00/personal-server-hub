@@ -1,9 +1,8 @@
-import json
-import urllib.request
-from auth import is_authorized, verify_discord_signature
-from config import parse_start_args, DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN
-import hetzner
 import os
+import json
+from auth import is_authorized, verify_discord_signature
+from config import parse_start_args
+import hetzner
 
 def build_response(status_code: int, body: dict) -> dict:
     return {
@@ -25,23 +24,20 @@ def get_registered_discord_commands() -> str:
         except Exception:
             pass
 
-    # Fallback falls die Cache-Datei nicht existiert
     return (
         "📖 **Verfügbare Server-Befehle:**\n\n"
-        "• `/start [args]` — Startet einen Gameserver on demand\n"
+        "• `/start [args]` — Startet den Server (Standard: Minecraft, 5m)\n"
         "• `/status` — Zeigt alle aktiven Server samt IP an\n"
         "• `/stop` — Stoppt und löscht den laufenden Server\n"
-        "• `/help` — Zeigt alle Befehle und Beispiele an"
+        "• `/help` — Zeigt diese Übersicht an"
     )
 
 def handle_discord_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
 
-    # Discord PING Handshake (Typ 1)
     if interaction_type == 1:
         return build_response(200, {"type": 1})
 
-    # Discord APPLICATION_COMMAND (Typ 2)
     if interaction_type == 2:
         data = body.get("data", {})
         command_name = data.get("name")
@@ -54,7 +50,6 @@ def handle_discord_interaction(body: dict) -> dict:
             raw_input = options.get("args", "")
 
             game, seconds, readable = parse_start_args(raw_input)
-
             res = hetzner.create_server(
                 game=game,
                 seconds=seconds,
@@ -103,7 +98,7 @@ def lambda_handler(event, context):
     if http_method == "OPTIONS":
         return build_response(200, {"message": "CORS OK"})
 
-    # 1. Discord Webhooks (Ed25519-Signaturprüfung)
+    # Discord Webhook Signature
     if "x-signature-ed25519" in headers or "X-Signature-Ed25519" in headers:
         if not verify_discord_signature(headers, raw_body):
             return build_response(401, {"error": "Invalid Discord Signature"})
@@ -113,7 +108,7 @@ def lambda_handler(event, context):
         except Exception as e:
             return build_response(500, {"error": str(e)})
 
-    # 2. REST API (Prüfung auf x-auth-token)
+    # REST API Auth
     if not is_authorized(headers):
         return build_response(401, {"error": "Unauthorized"})
 
@@ -128,7 +123,6 @@ def lambda_handler(event, context):
     action = body.get("action")
 
     try:
-        # Help Endpunkt
         if raw_path.endswith("/help") or action == "help":
             help_text = get_registered_discord_commands()
             return build_response(200, {
@@ -143,17 +137,16 @@ def lambda_handler(event, context):
                 ]
             })
 
-        # Start Endpunkt
         if raw_path.endswith("/start") or action == "start":
-            game = body.get("game", "minecraft")
+            game_input = body.get("game", "minecraft")
             duration_input = body.get("duration")
             server_type = body.get("server_type", "cpx32")
 
-            # Freitext parsen ("csgo 2h" oder separate Felder)
-            parsed_game, seconds, readable = parse_start_args(f"{game} {duration_input}" if duration_input else game)
+            input_str = f"{game_input} {duration_input}" if duration_input else game_input
+            game, seconds, readable = parse_start_args(input_str)
 
             result = hetzner.create_server(
-                game=parsed_game,
+                game=game,
                 seconds=seconds,
                 readable=readable,
                 server_type=server_type
@@ -164,12 +157,10 @@ def lambda_handler(event, context):
                 "data": result
             })
 
-        # Liste aller aktiven Server
         if raw_path.endswith("/servers") or action == "list":
             servers = hetzner.list_servers()
             return build_response(200, {"data": servers})
 
-        # Status einer bestimmten Instanz
         if raw_path.endswith("/status") or action == "status":
             query_params = event.get("queryStringParameters") or {}
             server_id = body.get("server_id") or query_params.get("server_id")
@@ -177,11 +168,9 @@ def lambda_handler(event, context):
                 return build_response(400, {"error": "server_id fehlt"})
             return build_response(200, {"data": hetzner.get_server_status(str(server_id))})
 
-        # Stop Endpunkt
         if raw_path.endswith("/stop") or action == "stop":
             server_id = body.get("server_id")
             if not server_id:
-                # Fallback: wenn keine ID übergeben wird, stoppe den ersten aktiven Server
                 active = hetzner.list_servers()
                 if not active:
                     return build_response(400, {"error": "Kein aktiver Server gefunden"})

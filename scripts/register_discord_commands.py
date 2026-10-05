@@ -27,12 +27,12 @@ if not APP_ID or not BOT_TOKEN:
 commands = [
     {
         "name": "start",
-        "description": "Startet Server (z. B. '/start', '/start 2h' oder '/start csgo 1d')",
+        "description": "Startet Server on demand (z. B. '/start' oder '/start 2h')",
         "options": [
             {
                 "type": 3,
                 "name": "args",
-                "description": "Optional: z. B. '2h', 'csgo' oder 'csgo 3d' (Standard: minecraft 5m)",
+                "description": "Optional: Laufzeit wie '2h', '3d' oder Spieltyp (Standard: minecraft 5m)",
                 "required": False
             }
         ]
@@ -67,8 +67,7 @@ try:
     with urllib.request.urlopen(req) as resp:
         print("Erfolgreich bei Discord registriert! Status:", resp.status)
         registered = json.loads(resp.read().decode())
-        
-        # Generiere dynamisch den Cache-Text basierend auf den registrierten Commands
+
         lines = ["📖 **Verfügbare Server-Befehle:**\n"]
         for cmd in sorted(registered, key=lambda x: x["name"]):
             name = cmd.get("name")
@@ -82,14 +81,13 @@ try:
 
         lines.append(
             "\n💡 **Beispiele für `/start`:**\n"
-            "• `/start` *(Minecraft, 5 Minuten Testlauf)*\n"
+            "• `/start` *(Minecraft, 5 Minuten)*\n"
             "• `/start args: 2h` *(Minecraft, 2 Stunden)*\n"
-            "• `/start args: 30m` *(Minecraft, 30 Minuten)*\n"
-            "• `/start args: csgo 1d` *(CS:GO, 1 Tag, max. 7d)*"
+            "• `/start args: 3d` *(Minecraft, 3 Tage, max. 7d)*\n"
+            "• `/start args: <spiel> 4h` *(Anderes Spiel aus dem Speicher)*"
         )
         cache_content = "\n".join(lines)
 
-        # Schreibe die Cache-Datei direkt in den aws_lambda Ordner
         cache_path = os.path.join(os.path.dirname(__file__), "..", "aws_lambda", "commands_cache.txt")
         with open(cache_path, "w", encoding="utf-8") as f:
             f.write(cache_content)
