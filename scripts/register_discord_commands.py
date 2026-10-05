@@ -3,17 +3,24 @@ import json
 import urllib.request
 import urllib.error
 
-env_vars = {}
-env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-if os.path.exists(env_path):
-    with open(env_path) as f:
-        for line in f:
-            if "=" in line and not line.startswith("#"):
-                k, v = line.strip().split("=", 1)
-                env_vars[k.strip()] = v.strip().strip('"').strip("'")
+# 1. Zuerst System-Umgebungsvariablen prüfen (GitHub Actions)
+APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
+BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 
-APP_ID = env_vars.get("DISCORD_APPLICATION_ID")
-BOT_TOKEN = env_vars.get("DISCORD_BOT_TOKEN")
+# 2. Falls leer: Lokale .env einlesen (lokal auf deinem Mac)
+if not APP_ID or not BOT_TOKEN:
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k == "DISCORD_APPLICATION_ID" and not APP_ID:
+                        APP_ID = v
+                    elif k == "DISCORD_BOT_TOKEN" and not BOT_TOKEN:
+                        BOT_TOKEN = v
 
 if not APP_ID or not BOT_TOKEN:
     print("Fehler: Bitte DISCORD_APPLICATION_ID und DISCORD_BOT_TOKEN prüfen!")
@@ -66,5 +73,7 @@ try:
         print(resp.read().decode())
 except urllib.error.HTTPError as e:
     print(f"HTTP Error {e.code}: {e.read().decode()}")
+    exit(1)
 except Exception as e:
     print("Fehler:", e)
+    exit(1)
