@@ -1,0 +1,18 @@
+# Lokale Umgebungsvariablen & Secrets
+.env
+.env*.local
+*.pem
+*.key
+
+# Python temporäre Dateien & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# AWS SAM / Deployment-Archive
+.aws-sam/
+*.zip
