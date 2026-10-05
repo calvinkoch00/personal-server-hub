@@ -56,9 +56,11 @@ def get_registered_discord_commands() -> str:
 def handle_discord_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
 
+    # Discord PING Handshake (Typ 1)
     if interaction_type == 1:
         return build_response(200, {"type": 1})
 
+    # Discord APPLICATION_COMMAND (Typ 2)
     if interaction_type == 2:
         data = body.get("data", {})
         command_name = data.get("name")
@@ -120,6 +122,7 @@ def lambda_handler(event, context):
     if http_method == "OPTIONS":
         return build_response(200, {"message": "CORS OK"})
 
+    # 1. Discord Webhooks (Ed25519-Signaturprüfung)
     if "x-signature-ed25519" in headers or "X-Signature-Ed25519" in headers:
         if not verify_discord_signature(headers, raw_body):
             return build_response(401, {"error": "Invalid Discord Signature"})
@@ -129,7 +132,82 @@ def lambda_handler(event, context):
         except Exception as e:
             return build_response(500, {"error": str(e)})
 
+    # 2. REST API (Prüfung auf x-auth-token)
     if not is_authorized(headers):
         return build_response(401, {"error": "Unauthorized"})
 
-    return build_response(200, {"message": "REST API OK"})
+    raw_path = event.get("rawPath") or event.get("path") or "/"
+    body = {}
+    if raw_body:
+        try:
+            body = json.loads(raw_body)
+        except Exception:
+            pass
+
+    action = body.get("action")
+
+    try:
+        # Help Endpunkt
+        if raw_path.endswith("/help") or action == "help":
+            help_text = get_registered_discord_commands()
+            return build_response(200, {
+                "message": "Befehlsübersicht",
+                "help": help_text,
+                "endpoints": [
+                    {"path": "POST /start", "description": "Startet Server (Body: game, duration, server_type)"},
+                    {"path": "GET /status?server_id=<id>", "description": "Status einer spezifischen Instanz"},
+                    {"path": "GET /servers", "description": "Liste aller aktiven Instanzen"},
+                    {"path": "POST /stop", "description": "Löscht Server (Body: server_id)"},
+                    {"path": "GET /help", "description": "Zeigt diese Hilfeübersicht"}
+                ]
+            })
+
+        # Start Endpunkt
+        if raw_path.endswith("/start") or action == "start":
+            game = body.get("game", "minecraft")
+            duration_input = body.get("duration")
+            server_type = body.get("server_type", "cpx32")
+
+            # Freitext parsen ("csgo 2h" oder separate Felder)
+            parsed_game, seconds, readable = parse_start_args(f"{game} {duration_input}" if duration_input else game)
+
+            result = hetzner.create_server(
+                game=parsed_game,
+                seconds=seconds,
+                readable=readable,
+                server_type=server_type
+            )
+            return build_response(200, {
+                "message": "Server gestartet",
+                "discord_summary": f"🎮 {result['game'].upper()} gestartet! IP: `{result['ip']}` ({result['lifetime_readable']})",
+                "data": result
+            })
+
+        # Liste aller aktiven Server
+        if raw_path.endswith("/servers") or action == "list":
+            servers = hetzner.list_servers()
+            return build_response(200, {"data": servers})
+
+        # Status einer bestimmten Instanz
+        if raw_path.endswith("/status") or action == "status":
+            query_params = event.get("queryStringParameters") or {}
+            server_id = body.get("server_id") or query_params.get("server_id")
+            if not server_id:
+                return build_response(400, {"error": "server_id fehlt"})
+            return build_response(200, {"data": hetzner.get_server_status(str(server_id))})
+
+        # Stop Endpunkt
+        if raw_path.endswith("/stop") or action == "stop":
+            server_id = body.get("server_id")
+            if not server_id:
+                # Fallback: wenn keine ID übergeben wird, stoppe den ersten aktiven Server
+                active = hetzner.list_servers()
+                if not active:
+                    return build_response(400, {"error": "Kein aktiver Server gefunden"})
+                server_id = str(active[0]["server_id"])
+
+            return build_response(200, {"data": hetzner.delete_server(str(server_id))})
+
+        return build_response(404, {"error": f"Endpoint '{raw_path}' nicht gefunden"})
+    except Exception as e:
+        return build_response(500, {"error": str(e)})
