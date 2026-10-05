@@ -46,9 +46,8 @@ def handle_discord_interaction(body: dict) -> dict:
             msg = get_registered_discord_commands()
 
         elif command_name == "start":
-            options = {opt["name"]: opt["value"] for opt in data.get("options", [])}
-            raw_input = options.get("args", "")
-
+            options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
+            raw_input = options.get("args")
             game, seconds, readable = parse_start_args(raw_input)
             res = hetzner.create_server(
                 game=game,
@@ -56,12 +55,12 @@ def handle_discord_interaction(body: dict) -> dict:
                 readable=readable,
                 server_type="cpx32"
             )
-
+            domain_info = f"`{res.get('domain')}` (IP: `{res.get('ip')}`)" if res.get('domain') else f"`{res.get('ip')}`"
             msg = (
-                f"🚀 **{res['game'].upper()}-Server wird gestartet!**\n"
-                f"• IP: `{res.get('ip')}`\n"
-                f"• Typ: `{res.get('server_type')}`\n"
-                f"⏱️ **Laufzeit:** {res.get('lifetime_readable')} (danach Auto-Shutdown)"
+                f"🎮 **{res.get('game', '').upper()}-Server wird gestartet!**\n"
+                f"🌐 **Adresse:** {domain_info}\n"
+                f"⚡ **Typ:** `{res.get('server_type')}`\n"
+                f"⏳ **Laufzeit:** {res.get('lifetime_readable')} *(danach Auto-Shutdown)*"
             )
 
         elif command_name == "status":
