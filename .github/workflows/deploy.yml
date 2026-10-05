@@ -7,6 +7,7 @@ on:
     paths:
       - 'aws_lambda/**'
       - 'tests/**'
+      - 'requirements.txt'
 
 jobs:
   test:
@@ -21,7 +22,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install Test Dependencies
-        run: pip install pytest
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
 
       - name: Run Pytest
         run: pytest tests/
@@ -33,6 +36,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Lambda Platform Dependencies
+        run: |
+          mkdir build
+          cp -r aws_lambda/* build/
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target=build \
+            --implementation cp \
+            --python-version 3.12 \
+            --only-binary=:all: \
+            -r requirements.txt
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -42,7 +62,7 @@ jobs:
 
       - name: Package Lambda Function
         run: |
-          cd aws_lambda
+          cd build
           zip -r ../function.zip .
           cd ..
 
@@ -51,5 +71,3 @@ jobs:
           aws lambda update-function-code \
             --function-name hetzner-server-controller \
             --zip-file fileb://function.zip
-
-      

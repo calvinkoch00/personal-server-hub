@@ -7,7 +7,6 @@ import os
 # Pfad zu aws_lambda explizit in den Python-Suchpfad aufnehmen
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "aws_lambda")))
 
-# Jetzt kann lambda_function seine Nachbardateien (auth, hetzner, config) direkt finden
 from lambda_function import lambda_handler
 
 @pytest.fixture(autouse=True)
@@ -15,6 +14,7 @@ def set_env(monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("HETZNER_API_TOKEN", "mock-token")
     monkeypatch.setenv("VOLUME_ID", "123456")
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", "")
 
 def test_unauthorized_request():
     event = {"headers": {"x-auth-token": "falscher-token"}, "rawPath": "/start"}

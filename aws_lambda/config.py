@@ -5,9 +5,11 @@ VOLUME_ID = os.environ.get("VOLUME_ID", "107045799")
 LOCATION = os.environ.get("LOCATION", "nbg1")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 MAX_LIFETIME_SECONDS = int(os.environ.get("MAX_LIFETIME_SECONDS", "20"))
+DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 
 def get_cloud_init_script(max_seconds: int = 20) -> str:
-    # 20 Sekunden nach Booten löscht sich die VM selbst via Hetzner API
+    # 20 Sekunden nach dem Booten ruft die Instanz ihre eigene Hetzner-ID ab
+    # und löscht sich selbst über die Hetzner API
     return f"""#cloud-config
 runcmd:
   - mkdir -p /mnt/gamespeicher

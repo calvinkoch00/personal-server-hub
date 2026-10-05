@@ -8,15 +8,16 @@ BASE_URL = "https://api.hetzner.cloud/v1"
 def _request(endpoint: str, method: str = "GET", data: dict = None) -> dict:
     url = f"{BASE_URL}{endpoint}"
     encoded_data = json.dumps(data).encode("utf-8") if data else None
-    
+
     headers = {
         "Authorization": f"Bearer {HETZNER_API_TOKEN}",
         "Content-Type": "application/json"
     }
-    
+
     req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
     with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        content = resp.read().decode("utf-8")
+        return json.loads(content) if content else {}
 
 def create_server(server_type: str = "cpx32") -> dict:
     payload = {
@@ -47,14 +48,9 @@ def get_server_status(server_id: str) -> dict:
         "ip": server.get("public_net", {}).get("ipv4", {}).get("ip")
     }
 
-def delete_server(server_id: str) -> dict:
-    res = _request(f"/servers/{server_id}", method="DELETE")
-    return {"message": "Server wird gelöscht", "action": res.get("action")}
-
 def list_servers() -> list:
     res = _request("/servers", method="GET")
     servers = res.get("servers", [])
-    
     result = []
     for s in servers:
         result.append({
@@ -66,3 +62,7 @@ def list_servers() -> list:
             "created": s.get("created")
         })
     return result
+
+def delete_server(server_id: str) -> dict:
+    res = _request(f"/servers/{server_id}", method="DELETE")
+    return {"message": "Server wird gelöscht", "action": res.get("action")}
