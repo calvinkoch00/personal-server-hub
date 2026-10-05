@@ -67,6 +67,21 @@ def lambda_handler(event, context):
                 "data": result
             })
 
+        # Route 4: Alle laufenden Server auflisten (/servers oder POST {"action": "list"})
+        elif raw_path.endswith("/servers") or action == "list":
+            servers = hetzner.list_servers()
+            count = len(servers)
+            summary = (
+                f"🟢 Aktuell laufen {count} Server."
+                if count > 0
+                else "⚪ Aktuell laufen keine Server."
+            )
+            return build_response(200, {
+                "message": f"{count} Server gefunden",
+                "discord_summary": summary,
+                "data": servers
+            })
+
         else:
             return build_response(404, {"error": f"Endpoint '{raw_path}' nicht gefunden"})
 

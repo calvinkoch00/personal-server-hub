@@ -50,3 +50,19 @@ def get_server_status(server_id: str) -> dict:
 def delete_server(server_id: str) -> dict:
     res = _request(f"/servers/{server_id}", method="DELETE")
     return {"message": "Server wird gelöscht", "action": res.get("action")}
+
+def list_servers() -> list:
+    res = _request("/servers", method="GET")
+    servers = res.get("servers", [])
+    
+    result = []
+    for s in servers:
+        result.append({
+            "server_id": s.get("id"),
+            "name": s.get("name"),
+            "status": s.get("status"),
+            "ip": s.get("public_net", {}).get("ipv4", {}).get("ip"),
+            "server_type": s.get("server_type", {}).get("name"),
+            "created": s.get("created")
+        })
+    return result
