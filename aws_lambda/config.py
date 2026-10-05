@@ -6,23 +6,40 @@ VOLUME_ID = os.environ.get("VOLUME_ID", "107045799")
 LOCATION = os.environ.get("LOCATION", "nbg1")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
+DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID", "")
+DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 
-# 5 Minuten Standard, maximal 7 Tage (in Sekunden)
 DEFAULT_LIFETIME_SECONDS = 300
-MAX_LIFETIME_SECONDS = 7 * 24 * 3600  # 604800s
+MAX_LIFETIME_SECONDS = 7 * 24 * 3600  # 7 Tage
 
-def parse_duration_to_seconds(duration_str: str | None) -> tuple[int, str]:
-    """Wandelt Angaben wie '5m', '2h', '3d' in Sekunden um (max. 7 Tage)."""
+def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
+    """
+    Erkennt Formate wie:
+      - "" -> ('minecraft', 300, '5 Minuten')
+      - "2h" -> ('minecraft', 7200, '2 Stunde(n)')
+      - "csgo" -> ('csgo', 300, '5 Minuten')
+      - "csgo 3d" -> ('csgo', 259200, '3 Tag(e)')
+    """
+    if not raw_input or not raw_input.strip():
+        return "minecraft", DEFAULT_LIFETIME_SECONDS, "5 Minuten"
+
+    parts = raw_input.strip().lower().split()
+    game = "minecraft"
+    duration_str = None
+
+    for part in parts:
+        if re.match(r"^\d+[mhd]?$", part):
+            duration_str = part
+        else:
+            game = part
+
+    # Duration parsen
     if not duration_str:
-        return DEFAULT_LIFETIME_SECONDS, "5 Minuten"
+        return game, DEFAULT_LIFETIME_SECONDS, "5 Minuten"
 
-    raw = str(duration_str).strip().lower()
-    match = re.match(r"^(\d+)([mhd]?)$", raw)
-    if not match:
-        return DEFAULT_LIFETIME_SECONDS, "5 Minuten (Fallback)"
-
+    match = re.match(r"^(\d+)([mhd]?)$", duration_str)
     val = int(match.group(1))
-    unit = match.group(2) or "h"  # Standardeinheit falls nur eine Zahl übergeben wird: Stunden
+    unit = match.group(2) or "h"
 
     if unit == "m":
         seconds = val * 60
@@ -30,22 +47,18 @@ def parse_duration_to_seconds(duration_str: str | None) -> tuple[int, str]:
     elif unit == "d":
         seconds = val * 86400
         readable = f"{val} Tag(e)"
-    else:  # 'h'
+    else:
         seconds = val * 3600
         readable = f"{val} Stunde(n)"
 
-    # Hard-Cap: Maximal 7 Tage
     if seconds > MAX_LIFETIME_SECONDS:
-        return MAX_LIFETIME_SECONDS, "7 Tage (Maximum)"
-    
-    # Minimum: 60 Sekunden
-    if seconds < 60:
-        return 60, "1 Minute (Minimum)"
+        seconds, readable = MAX_LIFETIME_SECONDS, "7 Tage (Maximum)"
+    elif seconds < 60:
+        seconds, readable = 60, "1 Minute (Minimum)"
 
-    return seconds, readable
+    return game, seconds, readable
 
 def get_cloud_init_script(max_seconds: int = 300, game: str = "minecraft") -> str:
-    # Vorbereitung für spätere Spiele (z. B. csgo)
     docker_dir = f"/mnt/gamespeicher/{game}" if game != "minecraft" else "/mnt/gamespeicher"
 
     return f"""#cloud-config

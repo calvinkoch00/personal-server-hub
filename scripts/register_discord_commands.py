@@ -3,11 +3,9 @@ import json
 import urllib.request
 import urllib.error
 
-# 1. Zuerst System-Umgebungsvariablen prüfen (GitHub Actions)
 APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 
-# 2. Falls leer: Lokale .env einlesen (lokal auf deinem Mac)
 if not APP_ID or not BOT_TOKEN:
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
     if os.path.exists(env_path):
@@ -29,18 +27,12 @@ if not APP_ID or not BOT_TOKEN:
 commands = [
     {
         "name": "start",
-        "description": "Startet einen Gameserver on demand",
+        "description": "Startet Server (z. B. '/start', '/start 2h' oder '/start csgo 1d')",
         "options": [
             {
                 "type": 3,  # STRING
-                "name": "game",
-                "description": "Spiel-Server (Standard: minecraft, z.B. csgo)",
-                "required": False
-            },
-            {
-                "type": 3,  # STRING
-                "name": "duration",
-                "description": "Laufzeit z. B. '5m', '4h', '7d' (Standard: 5m, Max: 7d)",
+                "name": "args",
+                "description": "Optional: z. B. '2h', 'csgo' oder 'csgo 3d' (Standard: minecraft 5m)",
                 "required": False
             }
         ]
@@ -52,6 +44,10 @@ commands = [
     {
         "name": "stop",
         "description": "Stoppt den laufenden Gameserver"
+    },
+    {
+        "name": "help",
+        "description": "Zeigt alle Befehle und Beispiele an"
     }
 ]
 
@@ -73,7 +69,4 @@ try:
         print(resp.read().decode())
 except urllib.error.HTTPError as e:
     print(f"HTTP Error {e.code}: {e.read().decode()}")
-    exit(1)
-except Exception as e:
-    print("Fehler:", e)
     exit(1)
