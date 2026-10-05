@@ -73,16 +73,21 @@ write_files:
     permissions: '0644'
     content: |
       [Unit]
-      Description=Graceful Minecraft Docker Stop on Shutdown
+      Description=Graceful Minecraft Docker Stop and Self-Delete on Shutdown
       DefaultDependencies=no
-      Before=shutdown.target reboot.target halt.target umount.target
+      Before=shutdown.target reboot.target halt.target
       RequiresMountsFor=/mnt/gamespeicher
 
       [Service]
       Type=oneshot
       RemainAfterExit=true
       ExecStart=/bin/true
-      ExecStop=/bin/bash -c 'if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"💾 **Server stoppt:** Weltdaten werden gesichert...\\"}}" "{webhook_url}" || true; fi; cd /mnt/gamespeicher && docker compose stop -t 30 && sync; if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"🛑 **Offline:** Welt sicher gespeichert, Volume unmounted.\\"}}" "{webhook_url}" || true; fi'
+      ExecStop=/bin/bash -c '\
+        if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"💾 **Server stoppt:** Weltdaten werden gesichert...\\"}}" "{webhook_url}" || true; fi; \
+        cd /mnt/gamespeicher && docker compose stop -t 30 && sync; \
+        SERVER_ID=$(curl -s http://169.254.169.254/hetzner/v1/metadata/instance-id); \
+        if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"🛑 **Offline:** Welt gespeichert, Volume getrennt & Server gelöscht.\\"}}" "{webhook_url}" || true; fi; \
+        curl -s -X DELETE -H "Authorization: Bearer {HETZNER_API_TOKEN}" "https://api.hetzner.cloud/v1/servers/$SERVER_ID"'
       TimeoutStopSec=60
 
       [Install]
@@ -118,13 +123,8 @@ write_files:
 
       # Auto-Shutdown nach Ablauf der Zeit
       sleep {max_seconds}
-      if [ -n "{webhook_url}" ]; then
-        curl -s -H "Content-Type: application/json" -X POST \
-          -d '{{"content": "⏳ **Auto-Shutdown erreicht.** Server fährt herunter..."}}' \
-          "{webhook_url}" || true
-      fi
-
       SERVER_ID=$(curl -s http://169.254.169.254/hetzner/v1/metadata/instance-id)
+      # Initiiert sauberen Shutdown über Hetzner Actions API (löst systemd ExecStop aus)
       curl -s -X POST -H "Authorization: Bearer {HETZNER_API_TOKEN}" "https://api.hetzner.cloud/v1/servers/$SERVER_ID/actions/shutdown"
 
 runcmd:
