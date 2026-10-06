@@ -1,9 +1,9 @@
 import os
+import re
 import json
 import urllib.request
 import urllib.error
 from auth import is_authorized, verify_discord_signature
-from config import parse_start_args
 import hetzner
 import discord_handler
 
@@ -122,22 +122,36 @@ def lambda_handler(event, context):
     action = body.get("action")
 
     try:
-        # Start-Endpunkt
+        # Start-Endpunkt (Direkter REST-Aufruf)
         if raw_path.endswith("/start") or action == "start":
-            game_in = body.get("game", "minecraft")
-            duration_in = body.get("duration")
+            game = body.get("game", "minecraft").strip().lower()
+            duration_raw = str(body.get("duration", "5m")).strip().lower()
             server_type = body.get("server_type", "cpx32")
-            enable_logging = body.get("logging", False)
+            log_mode = str(body.get("log", body.get("logging", "none"))).strip().lower()
 
-            input_str = f"{game_in} {duration_in}" if duration_in else game_in
-            game, seconds, readable, parsed_log = parse_start_args(input_str)
+            if log_mode in ["true", "1"]:
+                log_mode = "game"
+            elif log_mode in ["false", "0"]:
+                log_mode = "none"
+
+            unit_map = {"m": 60, "h": 3600, "d": 86400}
+            readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
+
+            match = re.match(r"^(\d+)\s*([mhd])$", duration_raw)
+            if match:
+                val, unit = int(match.group(1)), match.group(2)
+                seconds = val * unit_map[unit]
+                readable = f"{val} {readable_map[unit]}"
+            else:
+                seconds = 300
+                readable = "5 Minute(n)"
 
             result = hetzner.create_server(
                 game=game,
                 seconds=seconds,
                 readable=readable,
                 server_type=server_type,
-                enable_logging=(enable_logging or parsed_log)
+                enable_logging=log_mode
             )
             return json_response(200, {
                 "message": "Server gestartet",
@@ -180,7 +194,8 @@ def lambda_handler(event, context):
             servers = hetzner.list_servers()
             if not servers:
                 return json_response(400, {"error": "Kein aktiver Server gefunden"})
-            res = call_agent_remote(servers[0]["ip"], "toggle-log")
+            mode = body.get("mode", "game")
+            res = call_agent_remote(servers[0]["ip"], "toggle-log", data={"mode": mode})
             return json_response(200, res)
 
         # Game-Account Whitelist / Linking Endpunkt (REST)
