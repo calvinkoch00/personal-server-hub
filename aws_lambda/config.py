@@ -1,5 +1,4 @@
 import os
-import re
 
 HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
