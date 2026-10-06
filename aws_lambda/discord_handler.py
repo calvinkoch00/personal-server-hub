@@ -1,3 +1,4 @@
+import re
 import os
 import json
 import urllib.error
@@ -36,12 +37,24 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
         return e.code, err_body
     
 def get_help_message() -> str:
+    cache_path = os.path.join(os.path.dirname(__file__), "commands_cache.txt")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except Exception:
+            pass
+
+    # Fallback, falls commands_cache.txt fehlt
     return (
         "📖 **Verfügbare Server-Befehle:**\n\n"
-        "• `/start [args]` — Startet den Server (z. B. `2h log=true`)\n"
+        "• `/start` — Startet den Server (Felder: `game`, `duration`, `log`)\n"
         "• `/status` — Zeigt alle aktiven Server samt IP an\n"
         "• `/log` — Schaltet Live-Logs im Discord-Kanal ein/aus\n"
         "• `/stop` — Stoppt und löscht den laufenden Server\n"
+        "• `/addgameaccount` — Verknüpft deinen Ingame-Namen mit Discord\n"
         "• `/help` — Zeigt diese Übersicht an"
     )
 
@@ -106,8 +119,24 @@ def handle_interaction(body: dict) -> dict:
 
     elif command == "start":
         options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
-        raw_input = options.get("args")
-        game, seconds, readable, enable_logging = parse_start_args(raw_input)
+
+        # 1. Felder mit Standardwerten direkt auslesen (ohne Text-Parser)
+        game = str(options.get("game", "minecraft")).strip().lower()
+        duration_raw = str(options.get("duration", "5m")).strip().lower()
+        enable_logging = bool(options.get("log", False))
+
+        # 2. Reine Zeitumrechnung (Sekunden & Lesbarkeit)
+        unit_map = {"m": 60, "h": 3600, "d": 86400}
+        readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
+        
+        match = re.match(r"^(\d+)([mhd])$", duration_raw)
+        if match:
+            val, unit = int(match.group(1)), match.group(2)
+            seconds = val * unit_map[unit]
+            readable = f"{val} {readable_map[unit]}"
+        else:
+            seconds = 300
+            readable = "5 Minute(n)"
 
         try:
             res = hetzner.create_server(
@@ -118,11 +147,13 @@ def handle_interaction(body: dict) -> dict:
                 enable_logging=enable_logging
             )
             addr = f"`{res.get('domain')}` (IP: `{res.get('ip')}`)" if res.get("domain") else f"`{res.get('ip')}`"
+            log_status = "🟢 Aktiv" if enable_logging else "⚪ Aus"
             msg = (
                 f"🟡 **Hardware wird hochgefahren!**\n"
                 f"🎮 **Spiel:** {res.get('game', '').upper()}\n"
                 f"🌐 **Adresse:** {addr}\n"
-                f"⏳ **Laufzeit:** {res.get('lifetime_readable', readable)}\n\n"
+                f"⏳ **Laufzeit:** {readable}\n"
+                f"📡 **Live-Logs:** {log_status}\n\n"
                 f"*(Bereitschaftsmeldung folgt automatisch, sobald der Server beitretbar ist!)*"
             )
         except Exception as e:

@@ -27,12 +27,35 @@ if not APP_ID or not BOT_TOKEN:
 commands = [
     {
         "name": "start",
-        "description": "Startet Server on demand (z. B. '/start 2h' oder '/start 2h log=true')",
+        "description": "Startet einen Gameserver On-Demand",
         "options": [
             {
-                "type": 3,
-                "name": "args",
-                "description": "Optional: Dauer ('2h', '3d'), Spiel oder Logging-Flag ('log=true')",
+                "type": 3,  # STRING
+                "name": "game",
+                "description": "Spiel auswählen (Standard: minecraft)",
+                "required": False,
+                "choices": [
+                    {"name": "Minecraft", "value": "minecraft"}
+                ]
+            },
+            {
+                "type": 3,  # STRING
+                "name": "duration",
+                "description": "Laufzeit auswählen oder eingeben (Standard: 5m)",
+                "required": False,
+                "choices": [
+                    {"name": "5 Minuten (Test)", "value": "5m"},
+                    {"name": "30 Minuten", "value": "30m"},
+                    {"name": "1 Stunde", "value": "1h"},
+                    {"name": "2 Stunden", "value": "2h"},
+                    {"name": "4 Stunden", "value": "4h"},
+                    {"name": "1 Tag", "value": "1d"}
+                ]
+            },
+            {
+                "type": 5,  # BOOLEAN
+                "name": "log",
+                "description": "Live-Logs nach Discord streamen? (Standard: False)",
                 "required": False
             }
         ]

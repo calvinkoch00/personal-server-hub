@@ -23,13 +23,6 @@ def get_game_config(game: str = "minecraft") -> dict:
 
 
 def parse_start_args(raw_input: str | None) -> tuple[str, int, str, bool]:
-    """
-    Parst Spiel, Dauer und Logging-Flag.
-    Beispiele:
-      None -> ("minecraft", 300, "5 Minute(n)", False)
-      "2h logging=true" -> ("minecraft", 7200, "2 Stunde(n)", True)
-      "minecraft 45m log" -> ("minecraft", 2700, "45 Minute(n)", True)
-    """
     if not raw_input:
         return DEFAULT_GAME, 300, "5 Minute(n)", False
 
@@ -38,9 +31,10 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str, bool]:
     filtered_tokens = []
 
     for token in tokens:
-        if token in ["logging=true", "log=true", "log", "logging"]:
+        # Erkennt log, log=true, logging=true, logging
+        if token in ["log", "logging", "log=true", "logging=true"]:
             enable_logging = True
-        elif token in ["logging=false", "log=false"]:
+        elif token in ["log=false", "logging=false"]:
             enable_logging = False
         else:
             filtered_tokens.append(token)
@@ -63,6 +57,7 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str, bool]:
                 seconds = value * 86400
                 readable = f"{value} Tag(e)"
         else:
+            # Falls es keine Zahl/Einheit ist, ist es der Spielname
             game = token
 
     return game, seconds, readable, enable_logging

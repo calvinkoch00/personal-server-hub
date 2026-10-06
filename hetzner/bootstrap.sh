@@ -46,6 +46,12 @@ done
 
 pip3 install --break-system-packages requests python-dotenv
 
+# Live-Logging aktivieren, falls beim Start angefordert (VOR dem Service-Start anlegen!)
+if [ "${ENABLE_LOGGING:-false}" = "true" ]; then
+    echo "[BOOTSTRAP] Live-Logging Flag gesetzt."
+    touch /tmp/discord_logging_enabled
+fi
+
 # 5. Vier separate systemd Services erstellen
 
 # Service 1: Lifecycle Guard
@@ -97,7 +103,6 @@ After=network.target docker.service
 Type=simple
 WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
-Environment=ENABLE_LOGGING=${ENABLE_LOGGING:-false}
 ExecStart=/usr/bin/python3 $AGENT_DIR/log_streamer.py
 Restart=always
 RestartSec=5
