@@ -8,7 +8,6 @@ import hetzner
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-FX_CHF_TO_EUR = float(os.environ.get("FX_CHF_TO_EUR", "0.95"))
 
 
 def supabase_client_request(endpoint: str, method: str = "POST", data: dict = None, headers_extra: dict = None) -> tuple[int, str]:
@@ -35,6 +34,60 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8") if e.fp else ""
         return e.code, err_body
+
+
+def get_current_chf_to_eur_rate() -> tuple[float, str]:
+    """
+    Ermittelt den Kurs CHF -> EUR:
+    1. Prüft, ob heute bereits ein Kurs in dim_exchange_rates gecacht ist.
+    2. Falls nicht: Ruft EZB-Kurs via API ab und speichert ihn in Supabase.
+    3. Fallback: Nimmt den neuesten historischen Kurs aus Supabase.
+    """
+    today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    status, resp = supabase_client_request(
+        f"dim_exchange_rates?rate_date=eq.{today_str}&base_currency=eq.CHF&target_currency=eq.EUR&select=rate",
+        method="GET"
+    )
+    if status == 200:
+        rows = json.loads(resp)
+        if rows:
+            return float(rows[0]["rate"]), f"Supabase Cache ({today_str})"
+
+    try:
+        req = urllib.request.Request("https://api.frankfurter.app/latest?from=CHF&to=EUR", headers={"User-Agent": "GameServer-Bot/1.0"})
+        with urllib.request.urlopen(req, timeout=3) as api_resp:
+            if api_resp.status == 200:
+                data = json.loads(api_resp.read().decode("utf-8"))
+                rate = float(data.get("rates", {}).get("EUR", 0.0))
+                if rate > 0:
+                    api_date = data.get("date", today_str)
+                    supabase_client_request(
+                        "dim_exchange_rates",
+                        method="POST",
+                        data={
+                            "rate_date": api_date,
+                            "base_currency": "CHF",
+                            "target_currency": "EUR",
+                            "rate": rate,
+                            "source": "api.frankfurter.app (EZB)"
+                        },
+                        headers_extra={"Prefer": "resolution=merge-duplicates"}
+                    )
+                    return rate, f"live ({api_date})"
+    except Exception as e:
+        print(f"[FX API WARNING] Live-Abruf fehlgeschlagen: {e}", flush=True)
+
+    status_fb, resp_fb = supabase_client_request(
+        "dim_exchange_rates?base_currency=eq.CHF&target_currency=eq.EUR&order=rate_date.desc&limit=1&select=rate,rate_date",
+        method="GET"
+    )
+    if status_fb == 200:
+        fb_rows = json.loads(resp_fb)
+        if fb_rows:
+            return float(fb_rows[0]["rate"]), f"letzter bekannter Kurs ({fb_rows[0]['rate_date']})"
+
+    return float(os.environ.get("FX_CHF_TO_EUR", "1.05")), "Notfall-Fallback"
 
 
 def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
@@ -367,7 +420,13 @@ def handle_interaction(body: dict) -> dict:
                 msg = "❌ Bitte als Währung entweder `CHF` oder `EUR` angeben."
             else:
                 amount_orig = float(amount_raw)
-                fx_rate = FX_CHF_TO_EUR if currency == "CHF" else 1.0000
+                if currency == "CHF":
+                    fx_rate, fx_source = get_current_chf_to_eur_rate()
+                    fx_text = f" *(Wechselkurs 1 CHF = {fx_rate:.4f} EUR [{fx_source}])* "
+                else:
+                    fx_rate = 1.0000
+                    fx_text = ""
+
                 amount_eur = round(amount_orig * fx_rate, 2)
 
                 payment_data = {
@@ -382,7 +441,6 @@ def handle_interaction(body: dict) -> dict:
 
                 status_p, resp_p = supabase_client_request("fact_user_payments", method="POST", data=payment_data)
                 if status_p in [200, 201]:
-                    fx_text = f" *(Wechselkurs 1 CHF = {fx_rate:.4f} EUR)*" if currency == "CHF" else ""
                     msg = (
                         f"✅ **Zahlung erfolgreich verbucht!**\n"
                         f"• Nutzer: <@{target_uid}>\n"
@@ -421,7 +479,7 @@ def handle_interaction(body: dict) -> dict:
                 if existing_accounts:
                     owner_id = str(existing_accounts[0].get("discord_user_id"))
                     if owner_id == discord_user_id:
-                        msg = f"ℹ️ Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
+                        msg = f"ℹ️️ Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
                     else:
                         msg = f"⛔ **Zugriff verweigert:** Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit einem anderen Discord-Account verknüpft!"
                 else:
