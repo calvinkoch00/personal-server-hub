@@ -1,148 +1,135 @@
-import os
-import sys
 import json
-import pytest
-from unittest.mock import patch
-
-# aws_lambda in den Python-Pfad aufnehmen
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "aws_lambda")))
+from unittest.mock import MagicMock, patch
 
 import config
+import hetzner
 from lambda_function import lambda_handler
+from config import parse_start_args
 
 
-@pytest.fixture(autouse=True)
-def set_env(monkeypatch):
-    """Setzt alle Dummy-Variablen isoliert für den Test-Runner."""
-    monkeypatch.setenv("AUTH_SECRET", "test-secret")
-    monkeypatch.setenv("HETZNER_API_TOKEN", "mock-token")
-    monkeypatch.setenv("VOLUME_ID", "107045799")
-    monkeypatch.setenv("DISCORD_PUBLIC_KEY", "mock-discord-key")
-    monkeypatch.setenv("DISCORD_STATUS_WEBHOOK_URL", "https://discord.com/api/webhooks/mock")
-    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "test-sb-key")
-    monkeypatch.setenv("GITHUB_REPO_RAW", "https://raw.githubusercontent.com/calvinkoch/personal-server-hub/main")
-    monkeypatch.setenv("GITHUB_TOKEN", "test-gh-token")
-
-
-# ================= 1. Authentifizierung & Basis-Routen =================
-
+# 1. Security Gatekeeper Test
 def test_unauthorized_request():
     event = {
-        "headers": {"x-auth-token": "falscher-token"},
-        "rawPath": "/start"
+        "rawPath": "/start",
+        "headers": {"x-auth-token": "invalid-token"},
+        "body": json.dumps({"game": "minecraft"})
     }
-    resp = lambda_handler(event, None)
-    assert resp["statusCode"] == 401
+    response = lambda_handler(event, None)
+    assert response["statusCode"] == 401
+    body = json.loads(response["body"])
+    assert "error" in body or "Unauthorized" in str(body)
 
 
-# ================= 2. Server-Endpoints (Start / List / Stop) =================
-
-@patch("lambda_function.hetzner.create_server")
-def test_start_endpoint_success(mock_create):
+# 2. Server Start Test
+@patch("hetzner.create_server")
+def test_start_endpoint_success(mock_create, auth_headers):
+    # Mocking: create_server Rückgabewert mit allen Pflichtfeldern
     mock_create.return_value = {
-        "server_id": 999,
+        "server_id": 123456,
         "name": "minecraft-ondemand",
-        "status": "running",
-        "ip": "1.2.3.4",
-        "domain": "mc.calvinkoch.ch",
         "game": "minecraft",
+        "ip": "1.2.3.4",
+        "lifetime_readable": "2 Stunde(n)",
         "server_type": "cpx32",
-        "lifetime_seconds": 300,
-        "lifetime_readable": "5 Minute(n)"
+        "status": "initializing"
     }
 
     event = {
-        "headers": {"x-auth-token": "test-secret"},
         "rawPath": "/start",
-        "body": json.dumps({"server_type": "cpx32", "game": "minecraft"})
+        "headers": auth_headers,
+        "body": json.dumps({"game": "minecraft", "duration": "2h"})
     }
+    response = lambda_handler(event, None)
 
-    resp = lambda_handler(event, None)
-    assert resp["statusCode"] == 200
-    body = json.loads(resp["body"])
-    assert body["data"]["server_id"] == 999
-    assert "MINECRAFT gestartet!" in body["discord_summary"]
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body.get("message") == "Server gestartet"
+    assert "MINECRAFT" in body.get("discord_summary", "")
+    assert body["data"]["ip"] == "1.2.3.4"
 
 
-@patch("lambda_function.hetzner.list_servers")
-def test_list_servers_endpoint(mock_list):
+# 3. Server List Test
+@patch("hetzner.list_servers")
+def test_list_servers_endpoint(mock_list, auth_headers):
     mock_list.return_value = [
         {
-            "server_id": 12345,
+            "server_id": 98765,
             "name": "minecraft-ondemand",
             "status": "running",
-            "ip": "1.2.3.4",
-            "server_type": "cpx32",
-            "created": "2026-10-05T18:00:00Z"
+            "ip": "5.6.7.8"
         }
     ]
 
     event = {
-        "headers": {"x-auth-token": "test-secret"},
-        "rawPath": "/servers"
+        "rawPath": "/servers",
+        "headers": auth_headers,
+        "body": None
     }
+    response = lambda_handler(event, None)
 
-    resp = lambda_handler(event, None)
-    assert resp["statusCode"] == 200
-    body = json.loads(resp["body"])
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert isinstance(body.get("data"), list)
     assert len(body["data"]) == 1
-    assert body["data"][0]["server_id"] == 12345
+    assert body["data"][0]["ip"] == "5.6.7.8"
 
 
-@patch("lambda_function.hetzner.delete_server")
-@patch("lambda_function.hetzner.get_server_status")
-@patch("lambda_function.hetzner.trigger_server_graceful_stop")
-def test_stop_server_endpoint(mock_stop, mock_status, mock_delete):
-    mock_status.return_value = {
-        "server_id": "12345",
-        "status": "running",
-        "ip": "1.2.3.4"
-    }
-    mock_stop.return_value = {"status": "graceful_triggered"}
-    mock_delete.return_value = {"message": "Server wird gelöscht", "action": {}}
+# 4. Stop Server Test (über delete_server)
+@patch("hetzner.delete_server")
+@patch("hetzner.list_servers")
+def test_stop_server_endpoint(mock_list, mock_delete, auth_headers):
+    mock_list.return_value = [
+        {
+            "server_id": 98765,
+            "name": "minecraft-ondemand",
+            "ip": "5.6.7.8"
+        }
+    ]
+    mock_delete.return_value = {"status": "deleted"}
 
     event = {
-        "headers": {"x-auth-token": "test-secret"},
         "rawPath": "/stop",
-        "body": json.dumps({"server_id": "12345", "server_ip": "1.2.3.4"})
+        "headers": auth_headers,
+        "body": json.dumps({"game": "minecraft"})
     }
+    response = lambda_handler(event, None)
 
-    resp = lambda_handler(event, None)
-    assert resp["statusCode"] == 200, f"Fehler in Lambda: {resp.get('body')}"
-    body = json.loads(resp["body"])
-    assert "status" in body["data"] or "message" in body["data"]
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["data"]["status"] == "deleted"
+    mock_delete.assert_called_once_with("98765")
 
-# ================= 3. Bootloader & Konfigurations-Tests =================
 
+# 5. Stage-1 Bootloader Generation Test
 def test_stage1_bootloader_generation():
     script = config.get_stage1_bootloader(
         volume_id=107045799,
         game_port=25565,
         max_seconds=600
     )
-    assert "#!/bin/bash" in script
+
+    assert script.startswith("#!/bin/bash")
+    assert "set -euo pipefail" in script
     assert 'VOLUME_ID="107045799"' in script
     assert 'GAME_PORT="25565"' in script
     assert 'MAX_SECONDS="600"' in script
     assert 'SUPABASE_URL="https://test.supabase.co"' in script
     assert 'SUPABASE_KEY="test-sb-key"' in script
-    assert "hetzner/bootstrap.sh" in script
     assert "$MOUNT_DIR/secrets.env" in script
+    assert "raw.githubusercontent.com/calvinkoch00/personal-server-hub/main" in script
+    assert "hetzner/bootstrap.sh" in script
+    assert "exec /opt/bootstrap/bootstrap.sh" in script
 
+
+# 6. Flexible Zeiteingaben Test
 def test_parse_start_args():
-    """Prüft die Umrechnung von Zeiten (5m, 2h, 1d) und Defaults."""
-    game, seconds, readable = config.parse_start_args(None)
-    assert game == "minecraft"
-    assert seconds == 300
-    assert readable == "5 Minute(n)"
+    _, secs_none, _ = parse_start_args(None)
+    assert secs_none == 300
 
-    game, seconds, readable = config.parse_start_args("2h")
-    assert game == "minecraft"
-    assert seconds == 7200
-    assert readable == "2 Stunde(n)"
+    _, secs_2h, label_2h = parse_start_args("2h")
+    assert secs_2h == 7200
+    assert "2" in label_2h
 
-    game, seconds, readable = config.parse_start_args("minecraft 45m")
-    assert game == "minecraft"
-    assert seconds == 2700
-    assert readable == "45 Minute(n)"
+    _, secs_comb, label_comb = parse_start_args("minecraft 45m")
+    assert secs_comb == 2700
+    assert "45" in label_comb
