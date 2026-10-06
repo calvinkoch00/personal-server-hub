@@ -80,7 +80,7 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
 
 
 def get_stage1_bootloader(volume_id: int, game_port: int, max_seconds: int = 300) -> str:
-    """Stage-1 Bootloader: Schreibt Secrets, setzt Variablen und führt bootstrap.sh aus."""
+    """Stage-1 Bootloader als reines Bash-Skript (verhindert Cloud-Init YAML-Parsing-Fehler)."""
     gh_token = os.environ.get("GITHUB_TOKEN", GITHUB_TOKEN)
     gh_repo = os.environ.get("GITHUB_REPO_RAW", GITHUB_REPO_RAW)
     auth_sec = os.environ.get("AUTH_SECRET", AUTH_SECRET)
@@ -91,49 +91,56 @@ def get_stage1_bootloader(volume_id: int, game_port: int, max_seconds: int = 300
 
     auth_header = f'-H "Authorization: token {gh_token}"' if gh_token else ""
 
-    return f"""#cloud-config
-runcmd:
-  - |
-    set -eu
+    return f"""#!/bin/bash
+set -euo pipefail
 
-    # 1. Volume frühzeitig einhängen, damit secrets.env geschrieben werden kann
-    mkdir -p /mnt/gamespeicher
-    VOLUME_DEV="/dev/disk/by-id/scsi-0HC_Volume_{volume_id}"
+echo "[STAGE-1] Starte Initialisierung..."
 
-    for i in {{1..30}}; do
-      if [ -b "${{VOLUME_DEV}}" ]; then
-        break
-      fi
-      sleep 1
-    done
+# 1. Volume frühzeitig einhängen
+MOUNT_DIR="/mnt/gamespeicher"
+VOLUME_DEV="/dev/disk/by-id/scsi-0HC_Volume_{volume_id}"
 
-    if ! mountpoint -q /mnt/gamespeicher; then
-      mount -o discard,defaults "${{VOLUME_DEV}}" /mnt/gamespeicher
-    fi
+mkdir -p "$MOUNT_DIR"
 
-    # 2. Secrets zentral aus Lambda injizieren
-    cat << 'EOF_SECRETS' > /mnt/gamespeicher/secrets.env
+echo "[STAGE-1] Warte auf Block Volume $VOLUME_DEV..."
+for i in {{1..30}}; do
+  if [ -b "$VOLUME_DEV" ]; then
+    echo "[STAGE-1] Volume Device gefunden!"
+    break
+  fi
+  sleep 1
+done
+
+if ! mountpoint -q "$MOUNT_DIR"; then
+  mount -o discard,defaults "$VOLUME_DEV" "$MOUNT_DIR"
+  echo "[STAGE-1] Volume gemountet."
+fi
+
+# 2. Secrets zentral aus Lambda injizieren
+cat << 'EOF_SECRETS' > "$MOUNT_DIR/secrets.env"
 AUTH_SECRET="{auth_sec}"
 HETZNER_API_TOKEN="{hetzner_tok}"
 DISCORD_STATUS_WEBHOOK_URL="{discord_wh}"
 SUPABASE_URL="{sb_url}"
 SUPABASE_KEY="{sb_key}"
 EOF_SECRETS
-    chmod 600 /mnt/gamespeicher/secrets.env
+chmod 600 "$MOUNT_DIR/secrets.env"
 
-    # 3. Stage-2 Umgebungsvariablen setzen
-    export VOLUME_ID="{volume_id}"
-    export GAME_PORT="{game_port}"
-    export MAX_SECONDS="{max_seconds}"
-    export GITHUB_REPO="{gh_repo}"
-    export GITHUB_TOKEN="{gh_token}"
+# 3. Stage-2 Umgebungsvariablen setzen
+export VOLUME_ID="{volume_id}"
+export GAME_PORT="{game_port}"
+export MAX_SECONDS="{max_seconds}"
+export GITHUB_REPO="{gh_repo}"
+export GITHUB_TOKEN="{gh_token}"
 
-    # 4. bootstrap.sh laden und ausführen
-    mkdir -p /opt/bootstrap
-    curl -sSL -H "Cache-Control: no-cache" {auth_header} \\
-      "${{GITHUB_REPO}}/hetzner/bootstrap.sh?ts=$(date +%s)" \\
-      -o /opt/bootstrap/bootstrap.sh
+# 4. bootstrap.sh von GitHub laden und ausführen
+mkdir -p /opt/bootstrap
+echo "[STAGE-1] Lade bootstrap.sh..."
+curl -sSL -H "Cache-Control: no-cache" {auth_header} \\
+  "$GITHUB_REPO/hetzner/bootstrap.sh?ts=$(date +%s)" \\
+  -o /opt/bootstrap/bootstrap.sh
 
-    chmod +x /opt/bootstrap/bootstrap.sh
-    exec /opt/bootstrap/bootstrap.sh
+chmod +x /opt/bootstrap/bootstrap.sh
+echo "[STAGE-1] Übergebe an Stage-2..."
+exec /opt/bootstrap/bootstrap.sh
 """

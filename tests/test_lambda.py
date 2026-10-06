@@ -116,21 +116,19 @@ def test_stop_server_endpoint(mock_stop, mock_status, mock_delete):
 # ================= 3. Bootloader & Konfigurations-Tests =================
 
 def test_stage1_bootloader_generation():
-    """Prüft, ob der Cloud-Init-Stub alle Secrets und GitHub-Parameter korrekt einbettet."""
     script = config.get_stage1_bootloader(
         volume_id=107045799,
         game_port=25565,
         max_seconds=600
     )
-
+    assert "#!/bin/bash" in script
     assert 'VOLUME_ID="107045799"' in script
     assert 'GAME_PORT="25565"' in script
     assert 'MAX_SECONDS="600"' in script
     assert 'SUPABASE_URL="https://test.supabase.co"' in script
     assert 'SUPABASE_KEY="test-sb-key"' in script
     assert "hetzner/bootstrap.sh" in script
-    assert "/mnt/gamespeicher/secrets.env" in script
-
+    assert "$MOUNT_DIR/secrets.env" in script
 
 def test_parse_start_args():
     """Prüft die Umrechnung von Zeiten (5m, 2h, 1d) und Defaults."""
