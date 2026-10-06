@@ -104,6 +104,60 @@ commands = [
         ]
     },
     {
+        "name": "account",
+        "description": "Zeigt das Guthaben bzw. den Kontostand an",
+        "options": [
+            {
+                "type": 3,
+                "name": "user",
+                "description": "Nutzer auswählen (Standard: me, oder 'all', Username, Mention)",
+                "required": False
+            }
+        ]
+    },
+    {
+        "name": "cash",
+        "description": "Guthaben-Verwaltung (Nur für Administratoren)",
+        "default_member_permissions": "8",
+        "options": [
+            {
+                "type": 1,
+                "name": "add",
+                "description": "Fügt einem Nutzer Guthaben hinzu (z. B. nach Twint / Revolut)",
+                "options": [
+                    {
+                        "type": 3,
+                        "name": "user",
+                        "description": "Nutzer auswählen (@Mention, me, ID oder Username)",
+                        "required": True
+                    },
+                    {
+                        "type": 10,
+                        "name": "amount",
+                        "description": "Betrag der Zahlung",
+                        "required": True
+                    },
+                    {
+                        "type": 3,
+                        "name": "currency",
+                        "description": "Währung der Zahlung",
+                        "required": False,
+                        "choices": [
+                            {"name": "CHF (Schweizer Franken)", "value": "CHF"},
+                            {"name": "EUR (Euro)", "value": "EUR"}
+                        ]
+                    },
+                    {
+                        "type": 3,
+                        "name": "note",
+                        "description": "Notiz (z. B. 'Twint Zahlung')",
+                        "required": False
+                    }
+                ]
+            }
+        ]
+    },
+    {
         "name": "addgameaccount",
         "description": "Verknüpft deinen Ingame-Namen mit deinem Discord-Profil",
         "options": [
@@ -149,6 +203,8 @@ try:
             "• `/log <mode>` — Schaltet Logs um (`all`, `game`, `off`)",
             "• `/stop` — Stoppt und sichert den laufenden Server",
             "• `/costs [timeframe] [user]` — Zeigt Abrechnung & Spielzeiten",
+            "• `/account [user]` — Zeigt Guthaben / Kontostand (`me`, `all`, `@user`)",
+            "• `/cash add <user> <amount> [currency] [note]` — *(Admin)* Guthaben aufladen",
             "• `/addgameaccount <game> <username>` — Verknüpft dein Profil",
             "• `/help` — Zeigt diese Übersicht an"
         ]

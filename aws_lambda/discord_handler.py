@@ -8,6 +8,7 @@ import hetzner
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+FX_CHF_TO_EUR = float(os.environ.get("FX_CHF_TO_EUR", "0.95"))
 
 
 def supabase_client_request(endpoint: str, method: str = "POST", data: dict = None, headers_extra: dict = None) -> tuple[int, str]:
@@ -34,6 +35,29 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8") if e.fp else ""
         return e.code, err_body
+
+
+def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
+    val = (user_param or "").strip()
+    if not val or val.lower() == "me":
+        return caller_id, "me"
+
+    mention_match = re.match(r"^<@!?(\d+)>$", val)
+    if mention_match:
+        uid = mention_match.group(1)
+        return uid, f"<@{uid}>"
+
+    if val.isdigit():
+        return val, val
+
+    username_clean = val.lstrip("@")
+    status, resp = supabase_client_request(f"dim_users?discord_username=ilike.{username_clean}&select=discord_user_id,discord_username", method="GET")
+    if status == 200:
+        rows = json.loads(resp)
+        if rows:
+            return str(rows[0]["discord_user_id"]), rows[0].get("discord_username", username_clean)
+
+    return None, val
 
 
 def parse_timeframe(tf_str: str) -> tuple[datetime.datetime | None, datetime.datetime | None, str]:
@@ -82,6 +106,8 @@ def get_help_message() -> str:
         "• `/log <mode>` — Schaltet Logs um (`all`, `game`, `off`)\n"
         "• `/stop` — Stoppt und löscht den laufenden Server\n"
         "• `/costs` — Zeigt Serverkosten und Spielzeiten an (`timeframe`, `user`)\n"
+        "• `/account` — Zeigt dein aktuelles Guthaben / Kontostand\n"
+        "• `/cash add` — *(Admin)* Guthabeneinzahlung für einen Nutzer buchen\n"
         "• `/addgameaccount` — Verknüpft deinen Ingame-Namen mit Discord\n"
         "• `/help` — Zeigt diese Übersicht an"
     )
@@ -98,6 +124,9 @@ def handle_interaction(body: dict) -> dict:
 
     data = body.get("data", {})
     command = data.get("name")
+    caller_data = body.get("member", {}).get("user") or body.get("user", {})
+    caller_id = str(caller_data.get("id"))
+    caller_name = str(caller_data.get("username", "Admin"))
 
     if command == "help":
         msg = get_help_message()
@@ -145,7 +174,6 @@ def handle_interaction(body: dict) -> dict:
         game = str(options.get("game", "minecraft")).strip().lower()
         duration_raw = str(options.get("duration", "5m")).strip().lower()
         
-        # Log-Modus: none, game, all
         log_mode = str(options.get("log", "none")).strip().lower()
         if log_mode in ["true", "1"]:
             log_mode = "game"
@@ -214,11 +242,8 @@ def handle_interaction(body: dict) -> dict:
         user_param = str(options.get("user", "all")).strip()
         timeframe_param = str(options.get("timeframe", "this month")).strip()
 
-        caller_user_id = str((body.get("member", {}).get("user") or body.get("user", {})).get("id"))
-        if user_param.lower() == "me":
-            filter_user = caller_user_id
-        else:
-            filter_user = user_param.lstrip("@")
+        target_uid, display_name = resolve_discord_user_id(user_param, caller_id)
+        filter_user = target_uid if target_uid else user_param.lstrip("@")
 
         start_dt, end_dt, label_tf = parse_timeframe(timeframe_param)
 
@@ -238,7 +263,7 @@ def handle_interaction(body: dict) -> dict:
                     msg = f"ℹ️ Keine Kosten oder Spielzeiten für **{label_tf}** gefunden."
                 else:
                     total_server = rows[0].get("total_server_costs", 0.0)
-                    header = f"📊 **Kostenaufstellung ({label_tf})**\n*Server-Gesamtkosten: {float(total_server):.2f} €*\n"
+                    header = f"📊 **Kostenaufstellung ({label_tf})** *(inkl. 8.1% MWST)*\n*Server-Gesamtkosten: {float(total_server):.2f} €*\n"
                     table = "```asciidoc\n"
                     table += f"{'Spieler':<16} | {'Zeit':<7} | {'Anteil':<8} | {'Betrag'}\n"
                     table += "-" * 42 + "\n"
@@ -253,10 +278,124 @@ def handle_interaction(body: dict) -> dict:
             except Exception as e:
                 msg = f"❌ Fehler beim Formatieren der Abrechnung: {e}"
 
+    elif command == "account":
+        options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
+        user_param = str(options.get("user", "me")).strip()
+
+        if user_param.lower() == "all":
+            status, resp_text = supabase_client_request("view_user_balances?select=*&order=current_balance_eur.asc", method="GET")
+            if status == 200:
+                rows = json.loads(resp_text)
+                if not rows:
+                    msg = "ℹ️ Noch keine Kontobewegungen vorhanden."
+                else:
+                    header = "💳 **Übersicht aller Benutzer-Kontostände**\n"
+                    table = "```asciidoc\n"
+                    table += f"{'Spieler':<14} | {'Bezahlt':<8} | {'Kosten':<8} | {'Saldo'}\n"
+                    table += "-" * 42 + "\n"
+                    for r in rows:
+                        name = str(r.get("discord_username") or "Unknown")[:13]
+                        paid = f"{float(r.get('total_paid_eur', 0)):.2f}€"
+                        cost = f"{float(r.get('total_cost_gross_eur', 0)):.2f}€"
+                        bal = float(r.get("current_balance_eur", 0))
+                        icon = "+" if bal >= 0 else ""
+                        table += f"{name:<14} | {paid:<8} | {cost:<8} | {icon}{bal:.2f}€\n"
+                    table += "```"
+                    msg = header + table
+            else:
+                msg = f"⚠️ Fehler beim Abrufen der Kontostände ({status}): {resp_text}"
+        else:
+            target_uid, display_name = resolve_discord_user_id(user_param, caller_id)
+            if not target_uid:
+                msg = f"❌ Nutzer `{user_param}` konnte nicht gefunden werden."
+            else:
+                status, resp_text = supabase_client_request(f"view_user_balances?discord_user_id=eq.{target_uid}", method="GET")
+                if status == 200:
+                    rows = json.loads(resp_text)
+                    if not rows:
+                        msg = f"ℹ️ Für <@{target_uid}> wurden bisher keine Daten oder Spielzeiten erfasst."
+                    else:
+                        r = rows[0]
+                        uname = r.get("discord_username") or display_name
+                        paid_eur = float(r.get("total_paid_eur", 0))
+                        paid_chf = float(r.get("total_paid_chf", 0))
+                        hours = float(r.get("total_hours_played", 0))
+                        cost_gross = float(r.get("total_cost_gross_eur", 0))
+                        balance = float(r.get("current_balance_eur", 0))
+
+                        status_emoji = "🟢" if balance >= 0 else "🔴"
+                        status_label = "Guthaben" if balance >= 0 else "Offener Betrag (Schulden)"
+                        chf_note = f" (davon {paid_chf:.2f} CHF)" if paid_chf > 0 else ""
+
+                        msg = (
+                            f"💳 **Kontostand für `{uname}`**\n\n"
+                            f"• Eingezahlt: `{paid_eur:.2f} €`{chf_note}\n"
+                            f"• Verursachte Serverkosten: `{cost_gross:.2f} €` *({hours:.1f}h Spielzeit inkl. 8.1% MWST)*\n"
+                            f"• **{status_label}: {balance:+.2f} €** {status_emoji}"
+                        )
+                else:
+                    msg = f"⚠️ Fehler beim Abrufen des Kontos ({status}): {resp_text}"
+
+    elif command == "cash":
+        # 1. Admin-Prüfung über Spalte 'role' in dim_users
+        status_role, resp_role = supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
+        is_admin = False
+        if status_role == 200:
+            user_records = json.loads(resp_role)
+            if user_records and user_records[0].get("role") == "admin":
+                is_admin = True
+
+        if not is_admin:
+            msg = "⛔ **Zugriff verweigert:** Nur Administratoren dürfen diesen Befehl ausführen."
+        else:
+            suboptions = data.get("options", [])
+            add_opts = suboptions[0].get("options", []) if suboptions and suboptions[0].get("name") == "add" else suboptions
+            opts_map = {o["name"]: o.get("value") for o in add_opts}
+
+            target_user_raw = str(opts_map.get("user", "")).strip()
+            amount_raw = opts_map.get("amount")
+            currency = str(opts_map.get("currency", "CHF")).strip().upper()
+            note = str(opts_map.get("note", "Einzahlung"))
+
+            target_uid, display_name = resolve_discord_user_id(target_user_raw, caller_id)
+
+            if not target_uid:
+                msg = f"❌ Empfänger `{target_user_raw}` konnte nicht in der Datenbank gefunden werden."
+            elif not amount_raw or float(amount_raw) <= 0:
+                msg = "❌ Bitte gib einen gültigen Betrag größer als 0 an."
+            elif currency not in ["CHF", "EUR"]:
+                msg = "❌ Bitte als Währung entweder `CHF` oder `EUR` angeben."
+            else:
+                amount_orig = float(amount_raw)
+                fx_rate = FX_CHF_TO_EUR if currency == "CHF" else 1.0000
+                amount_eur = round(amount_orig * fx_rate, 2)
+
+                payment_data = {
+                    "discord_user_id": target_uid,
+                    "amount_original": amount_orig,
+                    "currency": currency,
+                    "exchange_rate": fx_rate,
+                    "amount_eur": amount_eur,
+                    "note": note,
+                    "created_by": caller_name
+                }
+
+                status_p, resp_p = supabase_client_request("fact_user_payments", method="POST", data=payment_data)
+                if status_p in [200, 201]:
+                    fx_text = f" *(Wechselkurs 1 CHF = {fx_rate:.4f} EUR)*" if currency == "CHF" else ""
+                    msg = (
+                        f"✅ **Zahlung erfolgreich verbucht!**\n"
+                        f"• Nutzer: <@{target_uid}>\n"
+                        f"• Erhaltener Betrag: `{amount_orig:.2f} {currency}`\n"
+                        f"• Gutgeschrieben in EUR: **`+{amount_eur:.2f} €`**{fx_text}\n"
+                        f"• Notiz: *{note}* (gebucht von `{caller_name}`)"
+                    )
+                else:
+                    msg = f"⚠ Fehler beim Speichern der Zahlung ({status_p}): {resp_p}"
+
     elif command == "addgameaccount":
-        user_data = body.get("member", {}).get("user") or body.get("user", {})
-        discord_user_id = str(user_data.get("id"))
-        discord_username = str(user_data.get("username", "Unknown"))
+        discord_user_id = caller_id
+        discord_username = str(caller_data.get("username", "Unknown"))
 
         options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
         game = str(options.get("game", "")).strip().lower()
