@@ -1,12 +1,14 @@
 import os
 import sys
 import time
+import json
+import uuid
 import datetime
 import threading
+import subprocess
 import re
 import signal
 import requests
-import subprocess
 from dotenv import load_dotenv
 
 load_dotenv("/mnt/gamespeicher/secrets.env")
@@ -15,6 +17,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 MOUNT_DIR = os.environ.get("VOLUME_DIR", "/mnt/gamespeicher")
 GAME_NAME = os.environ.get("GAME_NAME", "minecraft").lower()
+
+CACHE_FILE = os.path.join(MOUNT_DIR, "session_cache.json")
 
 JOIN_REGEX = re.compile(
     r"UUID of player (?P<player>[a-zA-Z0-9_]{3,16}) is|"
@@ -26,103 +30,219 @@ LEAVE_REGEX = re.compile(
     r": (?P<player2>[a-zA-Z0-9_]{3,16}) left the game"
 )
 
-active_sessions: dict[str, dict] = {}
 lock = threading.Lock()
 running = True
 
+# active_players: ingame_username -> session_id
+active_players: dict[str, str] = {}
 
-def supabase_request(endpoint: str, method: str = "POST", data: dict | list = None) -> list | dict | None:
-    if not (SUPABASE_URL and SUPABASE_KEY):
-        return None
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{endpoint}"
+
+# ==========================================
+# Lokaler JSON Cache Helpers
+# ==========================================
+
+def load_cache() -> dict[str, dict]:
+    """Lädt den lokalen Session-Cache vom Volume."""
+    if not os.path.exists(CACHE_FILE):
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[CACHE ERROR] Konnte Cache nicht lesen: {e}", flush=True)
+        return {}
+
+
+def save_cache(cache_data: dict[str, dict]):
+    """Schreibt den Cache atomar auf das gemountete Volume."""
+    tmp_path = CACHE_FILE + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, indent=2)
+        os.replace(tmp_path, CACHE_FILE)
+    except Exception as e:
+        print(f"[CACHE ERROR] Fehler beim Schreiben des Caches: {e}", flush=True)
+
+
+# ==========================================
+# Supabase API Helpers (Upsert)
+# ==========================================
+
+def supabase_upsert_sessions(sessions: list[dict]) -> bool:
+    """Sendet einen idempotenten Batch-Upsert an fact_player_sessions."""
+    if not sessions or not (SUPABASE_URL and SUPABASE_KEY):
+        return True
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/fact_player_sessions"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "return=representation"
+        "Prefer": "resolution=merge-duplicates"
     }
-    try:
-        if method == "POST":
-            r = requests.post(url, json=data, headers=headers, timeout=5)
-        elif method == "PATCH":
-            r = requests.patch(url, json=data, headers=headers, timeout=5)
-        else:
-            r = requests.get(url, headers=headers, timeout=5)
 
+    try:
+        r = requests.post(url, json=sessions, headers=headers, timeout=10)
         if r.status_code in [200, 201]:
-            return r.json() if r.text else None
+            return True
         else:
-            print(f"[TRACKER ERROR] Supabase API {r.status_code}: {r.text}", flush=True)
+            print(f"[SUPABASE SYNC ERROR] HTTP {r.status_code}: {r.text}", flush=True)
     except Exception as e:
-        print(f"[TRACKER ERROR] Supabase Exception: {e}", flush=True)
-    return None
+        print(f"[SUPABASE SYNC ERROR] Netzwerkfehler: {e}", flush=True)
+
+    return False
 
 
 def lookup_discord_user(ingame_username: str) -> tuple[str | None, str | None]:
-    res = supabase_request(
-        f"dim_game_accounts?game=eq.{GAME_NAME}&ingame_username=ilike.{ingame_username}&select=id,discord_user_id",
-        method="GET"
-    )
-    if isinstance(res, list) and len(res) > 0:
-        return res[0].get("discord_user_id"), res[0].get("id")
+    """Sucht Verknüpfung in dim_game_accounts."""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return None, None
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/dim_game_accounts?game=eq.{GAME_NAME}&ingame_username=ilike.{ingame_username}&select=id,discord_user_id"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            res = r.json()
+            if isinstance(res, list) and len(res) > 0:
+                return res[0].get("discord_user_id"), res[0].get("id")
+    except Exception:
+        pass
     return None, None
 
 
-def db_open_session(player_name: str) -> str | None:
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    discord_user_id, account_id = lookup_discord_user(player_name)
+# ==========================================
+# Session Management & Cache Logik
+# ==========================================
 
-    payload = {
-        "discord_user_id": discord_user_id,
-        "account_id": account_id,
-        "game": GAME_NAME,
-        "ingame_username": player_name,
-        "joined_at": now_iso,
-        "fallback_end_at": now_iso
-    }
-
-    res = supabase_request("fact_player_sessions", method="POST", data=payload)
-    if isinstance(res, list) and len(res) > 0:
-        session_id = res[0].get("id")
-        print(f"[TRACKER] + Session in fact_player_sessions erfasst: {player_name} (User: {discord_user_id})", flush=True)
-        return session_id
-    return None
-
-
-def db_heartbeat_flush():
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+def flush_cache_to_supabase():
+    """Gleicht Cache mit Supabase ab und löscht beendete Sessions."""
     with lock:
-        items = list(active_sessions.items())
-
-    for player, info in items:
-        sid = info.get("session_id")
-        if sid:
-            supabase_request(
-                f"fact_player_sessions?id=eq.{sid}",
-                method="PATCH",
-                data={"fallback_end_at": now_iso}
-            )
-
-
-def db_close_session(player_name: str, reason: str = "disconnect"):
-    with lock:
-        if player_name not in active_sessions:
+        cache = load_cache()
+        if not cache:
             return
-        info = active_sessions.pop(player_name)
 
-    sid = info.get("session_id")
-    if sid:
+        all_sessions = list(cache.values())
+        print(f"[SYNC] Starte Abgleich von {len(all_sessions)} Session(s) mit Supabase...", flush=True)
+
+        success = supabase_upsert_sessions(all_sessions)
+        if success:
+            # Nur beendete Sessions aus dem lokalen Cache entfernen
+            cleaned_cache = {}
+            for sid, sdata in cache.items():
+                if sdata.get("left_at") is None:
+                    cleaned_cache[sid] = sdata  # noch aktiv -> behalten
+
+            removed_count = len(cache) - len(cleaned_cache)
+            save_cache(cleaned_cache)
+            print(f"[SYNC] Erfolgreich! {removed_count} beendete Sessions aus lokalem Cache gelöscht. ({len(cleaned_cache)} aktive verbleiben)", flush=True)
+        else:
+            print("[SYNC] Abgleich fehlgeschlagen. Cache bleibt unverändert für nächsten Versuch erhalten.", flush=True)
+
+
+def recover_orphan_sessions_on_boot():
+    """Wird beim Start ausgeführt: Prüft alte Sessions von früheren Crashes."""
+    with lock:
+        cache = load_cache()
+        if not cache:
+            return
+
+        print(f"[BOOT-RECOVERY] {len(cache)} Session(s) im lokalen Cache gefunden. Prüfe Integrität...", flush=True)
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        supabase_request(
-            f"fact_player_sessions?id=eq.{sid}",
-            method="PATCH",
-            data={
-                "left_at": now_iso,
-                "fallback_end_at": now_iso,
-                "close_reason": reason
-            }
-        )
-        print(f"[TRACKER] - Session beendet: {player_name} ({reason})", flush=True)
+        
+        # Offene Sessions von früher schließen (waren durch Crash nicht beendet worden)
+        for sid, sdata in cache.items():
+            if sdata.get("left_at") is None:
+                sdata["left_at"] = sdata.get("fallback_end_at") or now_iso
+                sdata["close_reason"] = "crash_recovery"
+
+        save_cache(cache)
+
+    flush_cache_to_supabase()
+
+
+def on_player_join(player_name: str):
+    with lock:
+        if player_name in active_players:
+            return
+        
+        session_id = str(uuid.uuid4())
+        active_players[player_name] = session_id
+        
+        discord_user_id, account_id = lookup_discord_user(player_name)
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        session_entry = {
+            "id": session_id,
+            "discord_user_id": discord_user_id,
+            "account_id": account_id,
+            "game": GAME_NAME,
+            "ingame_username": player_name,
+            "joined_at": now_iso,
+            "fallback_end_at": now_iso,
+            "left_at": None,
+            "close_reason": None
+        }
+
+        cache = load_cache()
+        cache[session_id] = session_entry
+        save_cache(cache)
+
+        print(f"[TRACKER] + Join: {player_name} (Session: {session_id[:8]}..., User: {discord_user_id}) -> Lokal gecacht", flush=True)
+
+
+def on_player_leave(player_name: str, reason: str = "disconnect"):
+    with lock:
+        session_id = active_players.pop(player_name, None)
+        if not session_id:
+            return
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        cache = load_cache()
+        if session_id in cache:
+            cache[session_id]["left_at"] = now_iso
+            cache[session_id]["fallback_end_at"] = now_iso
+            cache[session_id]["close_reason"] = reason
+            save_cache(cache)
+            print(f"[TRACKER] - Leave: {player_name} ({reason}) -> Im Cache als beendet markiert", flush=True)
+
+
+def heartbeat_tick():
+    """Aktualisiert jede Minute das fallback_end_at im lokalen Cache."""
+    with lock:
+        if not active_players:
+            return
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        cache = load_cache()
+        updated = False
+
+        for player_name, session_id in active_players.items():
+            if session_id in cache:
+                cache[session_id]["fallback_end_at"] = now_iso
+                updated = True
+
+        if updated:
+            save_cache(cache)
+
+
+# ==========================================
+# Loops & Worker Threads
+# ==========================================
+
+def periodic_sync_and_heartbeat_loop():
+    """Ticker: Alle 60s Heartbeat lokal speichern, alle 600s (10m) Sync zu Supabase."""
+    counter = 0
+    while running:
+        time.sleep(60)
+        counter += 1
+        heartbeat_tick()
+
+        # Alle 10 Minuten (10 * 60s)
+        if counter % 10 == 0:
+            flush_cache_to_supabase()
 
 
 def tail_minecraft_logs():
@@ -142,7 +262,6 @@ def tail_minecraft_logs():
     print(f"[TRACKER] Tailing aktiv via Docker Container: {cid}", flush=True)
 
     try:
-        # Liest stdout und stderr des Containers live ab dem Start
         proc = subprocess.Popen(
             ["docker", "logs", "-f", "--tail", "20", cid],
             stdout=subprocess.PIPE,
@@ -158,52 +277,35 @@ def tail_minecraft_logs():
             if not line:
                 continue
 
-            # Join Event
             join_match = JOIN_REGEX.search(line)
             if join_match:
                 pname = join_match.group("player") or join_match.group("player2") or join_match.group("player3")
                 if pname and pname.lower() != "server":
-                    with lock:
-                        already_active = pname in active_sessions
-                        if not already_active:
-                            # Platzhalter sofort setzen, um Race-Conditions bei Folgezeilen abzufangen
-                            active_sessions[pname] = {"session_id": None}
-                    
-                    if not already_active:
-                        print(f"[TRACKER] Erkenne Join von: {pname}", flush=True)
-                        sid = db_open_session(pname)
-                        with lock:
-                            if sid:
-                                active_sessions[pname]["session_id"] = sid
-                            else:
-                                active_sessions.pop(pname, None)
+                    on_player_join(pname)
 
-            # Leave Event
             leave_match = LEAVE_REGEX.search(line)
             if leave_match:
                 pname = leave_match.group("player") or leave_match.group("player2")
                 if pname and pname.lower() != "server":
-                    print(f"[TRACKER] Erkenne Leave von: {pname}", flush=True)
-                    db_close_session(pname, reason="disconnect")
+                    on_player_leave(pname, reason="disconnect")
 
         proc.terminate()
     except Exception as e:
         print(f"[TRACKER ERROR] Docker Stream Fehler: {e}", flush=True)
 
-def heartbeat_loop():
-    while running:
-        time.sleep(60)
-        db_heartbeat_flush()
-
 
 def handle_sigterm(signum, frame):
     global running
-    print("[TRACKER] SIGTERM empfangen. Finalisiere offene Sessions...", flush=True)
+    print("[TRACKER] SIGTERM empfangen. Schließe offene Sessions & synchronisiere final mit Supabase...", flush=True)
     running = False
+    
     with lock:
-        players = list(active_sessions.keys())
+        players = list(active_players.keys())
     for p in players:
-        db_close_session(p, reason="shutdown")
+        on_player_leave(p, reason="shutdown")
+
+    # Finaler Sync vor dem Shutdown
+    flush_cache_to_supabase()
     sys.exit(0)
 
 
@@ -211,9 +313,14 @@ def main():
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGINT, handle_sigterm)
 
-    print(f"[TRACKER] Starte Fact-Session-Tracker für: {GAME_NAME}", flush=True)
+    print(f"[TRACKER] Starte robusten Session-Tracker (Offline-Cache & 10m-Sync) für: {GAME_NAME}", flush=True)
+
+    # 1. Boot-Recovery: Evtl. gecachte Reste alter Sessions abgleichen
+    recover_orphan_sessions_on_boot()
+
+    # 2. Worker starten
     threading.Thread(target=tail_minecraft_logs, daemon=True).start()
-    threading.Thread(target=heartbeat_loop, daemon=True).start()
+    threading.Thread(target=periodic_sync_and_heartbeat_loop, daemon=True).start()
 
     while running:
         time.sleep(1)
