@@ -13,7 +13,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 # GitHub Konfiguration
-GITHUB_REPO_RAW = os.environ.get("GITHUB_REPO_RAW", "")
+GITHUB_REPO_RAW = os.environ["GITHUB_REPO_RAW"]
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DEFAULT_GAME = "minecraft"
@@ -80,16 +80,13 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
 
 
 def get_stage1_bootloader(volume_id: int, game_port: int, max_seconds: int = 300) -> str:
-    """Stage-1 Bootloader als reines Bash-Skript (verhindert Cloud-Init YAML-Parsing-Fehler)."""
-    gh_token = os.environ.get("GITHUB_TOKEN", GITHUB_TOKEN)
+    """Stage-1 Bootloader als Bash-Skript für öffentliches Repo."""
     gh_repo = os.environ.get("GITHUB_REPO_RAW", GITHUB_REPO_RAW)
     auth_sec = os.environ.get("AUTH_SECRET", AUTH_SECRET)
     hetzner_tok = os.environ.get("HETZNER_API_TOKEN", HETZNER_API_TOKEN)
     discord_wh = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", DISCORD_STATUS_WEBHOOK_URL)
     sb_url = os.environ.get("SUPABASE_URL", SUPABASE_URL)
     sb_key = os.environ.get("SUPABASE_KEY", SUPABASE_KEY)
-
-    auth_header = f'-H "Authorization: token {gh_token}"' if gh_token else ""
 
     return f"""#!/bin/bash
 set -euo pipefail
@@ -116,7 +113,7 @@ if ! mountpoint -q "$MOUNT_DIR"; then
   echo "[STAGE-1] Volume gemountet."
 fi
 
-# 2. Secrets zentral aus Lambda injizieren
+# 2. Secrets für Stage-2 Agenten injizieren
 cat << 'EOF_SECRETS' > "$MOUNT_DIR/secrets.env"
 AUTH_SECRET="{auth_sec}"
 HETZNER_API_TOKEN="{hetzner_tok}"
@@ -126,17 +123,16 @@ SUPABASE_KEY="{sb_key}"
 EOF_SECRETS
 chmod 600 "$MOUNT_DIR/secrets.env"
 
-# 3. Stage-2 Umgebungsvariablen setzen
+# 3. Umgebungsvariablen setzen
 export VOLUME_ID="{volume_id}"
 export GAME_PORT="{game_port}"
 export MAX_SECONDS="{max_seconds}"
 export GITHUB_REPO="{gh_repo}"
-export GITHUB_TOKEN="{gh_token}"
 
-# 4. bootstrap.sh von GitHub laden und ausführen
+# 4. bootstrap.sh direkt via Raw URL laden (Repo ist öffentlich)
 mkdir -p /opt/bootstrap
 echo "[STAGE-1] Lade bootstrap.sh..."
-curl -sSL -H "Cache-Control: no-cache" {auth_header} \\
+curl -sSL -H "Cache-Control: no-cache" \\
   "$GITHUB_REPO/hetzner/bootstrap.sh?ts=$(date +%s)" \\
   -o /opt/bootstrap/bootstrap.sh
 
