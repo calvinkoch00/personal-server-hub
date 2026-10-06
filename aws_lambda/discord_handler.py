@@ -1,10 +1,40 @@
 import os
 import json
+import urllib.error
 import urllib.request
 from config import parse_start_args
 import hetzner
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
+
+def supabase_client_request(endpoint: str, method: str = "POST", data: dict = None, headers_extra: dict = None) -> tuple[int, str]:
+    """Führt REST-Aufrufe an Supabase mit der Standardbibliothek urllib aus."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("SUPABASE_URL oder SUPABASE_KEY in AWS Lambda nicht konfiguriert")
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{endpoint}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    if headers_extra:
+        headers.update(headers_extra)
+
+    payload = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            content = resp.read().decode("utf-8")
+            return resp.status, content
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8") if e.fp else ""
+        return e.code, err_body
+    
 def get_help_message() -> str:
     return (
         "📖 **Verfügbare Server-Befehle:**\n\n"
@@ -119,7 +149,6 @@ def handle_interaction(body: dict) -> dict:
             except Exception as e:
                 msg = f"⚠ Agent auf VM nicht erreichbar: {e}"
     elif command == "addgameaccount":
-        # Discord User ermitteln
         user_data = body.get("member", {}).get("user") or body.get("user", {})
         discord_user_id = str(user_data.get("id"))
         discord_username = str(user_data.get("username", "Unknown"))
@@ -133,15 +162,15 @@ def handle_interaction(body: dict) -> dict:
         else:
             try:
                 # 1. User in dim_users upserten
-                supabase_client_request(
+                status_u, resp_u = supabase_client_request(
                     "dim_users",
                     method="POST",
                     data={"discord_user_id": discord_user_id, "discord_username": discord_username},
                     headers_extra={"Prefer": "resolution=merge-duplicates"}
                 )
 
-                # 2. Game-Account in dim_game_accounts verknüpfen
-                res = supabase_client_request(
+                # 2. Account in dim_game_accounts eintragen
+                status_a, resp_a = supabase_client_request(
                     "dim_game_accounts",
                     method="POST",
                     data={
@@ -152,10 +181,10 @@ def handle_interaction(body: dict) -> dict:
                     headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
                 )
 
-                if res.status_code in [200, 201]:
+                if status_a in [200, 201]:
                     msg = f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
                 else:
-                    msg = f"⚠ Fehler beim Verknüpfen ({res.status_code}): {res.text}"
+                    msg = f"⚠ Fehler beim Verknüpfen ({status_a}): {resp_a}"
             except Exception as e:
                 msg = f"❌ Datenbankfehler: {e}"
 
