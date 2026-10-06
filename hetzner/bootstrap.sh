@@ -46,10 +46,12 @@ done
 
 pip3 install --break-system-packages requests python-dotenv
 
-# Live-Logging aktivieren, falls beim Start angefordert (VOR dem Service-Start anlegen!)
-if [ "${ENABLE_LOGGING:-false}" = "true" ]; then
-    echo "[BOOTSTRAP] Live-Logging Flag gesetzt."
-    touch /tmp/discord_logging_enabled
+# Log-Modus initial setzen (none, game, all)
+LOG_MODE="${ENABLE_LOGGING:-none}"
+if [ "$LOG_MODE" = "none" ] || [ "$LOG_MODE" = "false" ]; then
+    echo "off" > /tmp/discord_log_mode
+else
+    echo "$LOG_MODE" > /tmp/discord_log_mode
 fi
 
 # 5. Vier separate systemd Services erstellen
@@ -65,7 +67,8 @@ Type=simple
 WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
 Environment=VOLUME_DIR=$MOUNT_DIR
-ExecStart=/usr/bin/python3 $AGENT_DIR/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u $AGENT_DIR/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
 Restart=always
 RestartSec=5
 
@@ -85,7 +88,8 @@ WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
 Environment=VOLUME_DIR=$MOUNT_DIR
 Environment=GAME_NAME=${GAME:-minecraft}
-ExecStart=/usr/bin/python3 $AGENT_DIR/session_tracker.py
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u $AGENT_DIR/session_tracker.py
 Restart=always
 RestartSec=5
 
@@ -103,7 +107,8 @@ After=network.target docker.service
 Type=simple
 WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
-ExecStart=/usr/bin/python3 $AGENT_DIR/log_streamer.py
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u $AGENT_DIR/log_streamer.py
 Restart=always
 RestartSec=5
 
@@ -121,7 +126,8 @@ After=network.target
 Type=simple
 WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
-ExecStart=/usr/bin/python3 $AGENT_DIR/control_api.py
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u $AGENT_DIR/control_api.py
 Restart=always
 RestartSec=5
 

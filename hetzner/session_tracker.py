@@ -15,8 +15,15 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 MOUNT_DIR = os.environ.get("VOLUME_DIR", "/mnt/gamespeicher")
 GAME_NAME = os.environ.get("GAME_NAME", "minecraft").lower()
 
-JOIN_REGEX = re.compile(r": (?P<player>[a-zA-Z0-9_]{3,16})\[.*\] logged in|(?P<player2>[a-zA-Z0-9_]{3,16}) joined the game")
-LEAVE_REGEX = re.compile(r": (?P<player>[a-zA-Z0-9_]{3,16}) lost connection|(?P<player2>[a-zA-Z0-9_]{3,16}) left the game")
+JOIN_REGEX = re.compile(
+    r"UUID of player (?P<player>[a-zA-Z0-9_]{3,16}) is|"
+    r": (?P<player2>[a-zA-Z0-9_]{3,16})\[.*\] logged in|"
+    r": (?P<player3>[a-zA-Z0-9_]{3,16}) joined the game"
+)
+LEAVE_REGEX = re.compile(
+    r": (?P<player>[a-zA-Z0-9_]{3,16}) lost connection|"
+    r": (?P<player2>[a-zA-Z0-9_]{3,16}) left the game"
+)
 
 active_sessions: dict[str, dict] = {}
 lock = threading.Lock()
@@ -44,14 +51,13 @@ def supabase_request(endpoint: str, method: str = "POST", data: dict | list = No
         if r.status_code in [200, 201]:
             return r.json() if r.text else None
         else:
-            print(f"[TRACKER ERROR] Supabase API {r.status_code}: {r.text}")
+            print(f"[TRACKER ERROR] Supabase API {r.status_code}: {r.text}", flush=True)
     except Exception as e:
-        print(f"[TRACKER ERROR] Supabase Exception: {e}")
+        print(f"[TRACKER ERROR] Supabase Exception: {e}", flush=True)
     return None
 
 
 def lookup_discord_user(ingame_username: str) -> tuple[str | None, str | None]:
-    """Ermittelt discord_user_id und account_id aus dim_game_accounts."""
     res = supabase_request(
         f"dim_game_accounts?game=eq.{GAME_NAME}&ingame_username=ilike.{ingame_username}&select=id,discord_user_id",
         method="GET"
@@ -65,9 +71,6 @@ def db_open_session(player_name: str) -> str | None:
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     discord_user_id, account_id = lookup_discord_user(player_name)
 
-    if not discord_user_id:
-        print(f"[TRACKER WARN] Spieler '{player_name}' ist nicht registriert! Session wird ohne Discord-ID erfasst.")
-
     payload = {
         "discord_user_id": discord_user_id,
         "account_id": account_id,
@@ -80,7 +83,7 @@ def db_open_session(player_name: str) -> str | None:
     res = supabase_request("fact_player_sessions", method="POST", data=payload)
     if isinstance(res, list) and len(res) > 0:
         session_id = res[0].get("id")
-        print(f"[TRACKER] + Session in fact_player_sessions erfasst: {player_name} (User: {discord_user_id}, ID: {session_id})")
+        print(f"[TRACKER] + Session in fact_player_sessions erfasst: {player_name} (User: {discord_user_id})", flush=True)
         return session_id
     return None
 
@@ -118,7 +121,7 @@ def db_close_session(player_name: str, reason: str = "disconnect"):
                 "close_reason": reason
             }
         )
-        print(f"[TRACKER] - Session beendet: {player_name} ({reason})")
+        print(f"[TRACKER] - Session beendet: {player_name} ({reason})", flush=True)
 
 
 def tail_minecraft_logs():
@@ -127,19 +130,18 @@ def tail_minecraft_logs():
         os.path.join(MOUNT_DIR, "logs", "latest.log"),
     ]
     target_log = None
-    print("[TRACKER] Warte auf latest.log...")
+    print("[TRACKER] Warte auf latest.log...", flush=True)
     while running and not target_log:
         for p in log_candidates:
             if os.path.exists(p):
                 target_log = p
                 break
         if not target_log:
-            time.sleep(2)
+            time.sleep(1)
 
-    print(f"[TRACKER] Tailing aktiv auf: {target_log}")
+    print(f"[TRACKER] Tailing aktiv auf: {target_log}", flush=True)
     try:
         with open(target_log, "r", encoding="utf-8", errors="ignore") as f:
-            f.seek(0, 2)
             while running:
                 line = f.readline()
                 if not line:
@@ -148,18 +150,20 @@ def tail_minecraft_logs():
 
                 join_match = JOIN_REGEX.search(line)
                 if join_match:
-                    pname = join_match.group("player") or join_match.group("player2")
-                    with lock:
-                        if pname not in active_sessions:
-                            sid = db_open_session(pname)
-                            active_sessions[pname] = {"session_id": sid}
+                    pname = join_match.group("player") or join_match.group("player2") or join_match.group("player3")
+                    if pname and pname != "server":
+                        with lock:
+                            if pname not in active_sessions:
+                                sid = db_open_session(pname)
+                                active_sessions[pname] = {"session_id": sid}
 
                 leave_match = LEAVE_REGEX.search(line)
                 if leave_match:
                     pname = leave_match.group("player") or leave_match.group("player2")
-                    db_close_session(pname, reason="disconnect")
+                    if pname:
+                        db_close_session(pname, reason="disconnect")
     except Exception as e:
-        print(f"[TRACKER ERROR] Log Streamer Fehler: {e}")
+        print(f"[TRACKER ERROR] Log Streamer Fehler: {e}", flush=True)
 
 
 def heartbeat_loop():
@@ -170,7 +174,7 @@ def heartbeat_loop():
 
 def handle_sigterm(signum, frame):
     global running
-    print("[TRACKER] SIGTERM empfangen. Finalisiere offene Sessions...")
+    print("[TRACKER] SIGTERM empfangen. Finalisiere offene Sessions...", flush=True)
     running = False
     with lock:
         players = list(active_sessions.keys())
@@ -183,7 +187,7 @@ def main():
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGINT, handle_sigterm)
 
-    print(f"[TRACKER] Starte Fact-Session-Tracker für: {GAME_NAME}")
+    print(f"[TRACKER] Starte Fact-Session-Tracker für: {GAME_NAME}", flush=True)
     threading.Thread(target=tail_minecraft_logs, daemon=True).start()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
 

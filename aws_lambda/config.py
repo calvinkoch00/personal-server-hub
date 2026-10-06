@@ -22,52 +22,11 @@ def get_game_config(game: str = "minecraft") -> dict:
     return GAME_CONFIGS.get(game.lower(), GAME_CONFIGS[DEFAULT_GAME])
 
 
-def parse_start_args(raw_input: str | None) -> tuple[str, int, str, bool]:
-    if not raw_input:
-        return DEFAULT_GAME, 300, "5 Minute(n)", False
-
-    tokens = raw_input.strip().lower().split()
-    enable_logging = False
-    filtered_tokens = []
-
-    for token in tokens:
-        # Erkennt log, log=true, logging=true, logging
-        if token in ["log", "logging", "log=true", "logging=true"]:
-            enable_logging = True
-        elif token in ["log=false", "logging=false"]:
-            enable_logging = False
-        else:
-            filtered_tokens.append(token)
-
-    game = DEFAULT_GAME
-    seconds = 300
-    readable = "5 Minute(n)"
-
-    for token in filtered_tokens:
-        match = re.match(r"^(\d+)([mhd])$", token)
-        if match:
-            value, unit = int(match.group(1)), match.group(2)
-            if unit == "m":
-                seconds = value * 60
-                readable = f"{value} Minute(n)"
-            elif unit == "h":
-                seconds = value * 3600
-                readable = f"{value} Stunde(n)"
-            elif unit == "d":
-                seconds = value * 86400
-                readable = f"{value} Tag(e)"
-        else:
-            # Falls es keine Zahl/Einheit ist, ist es der Spielname
-            game = token
-
-    return game, seconds, readable, enable_logging
-
-
 def get_stage1_bootloader(
     volume_id: int,
     game_port: int = 25565,
     max_seconds: int = 300,
-    enable_logging: bool = False
+    enable_logging: str = "none"
 ) -> str:
     auth_secret = os.environ.get("AUTH_SECRET", "")
     hetzner_token = os.environ.get("HETZNER_API_TOKEN", "")
@@ -119,7 +78,7 @@ chmod 600 "$MOUNT_DIR/secrets.env"
 export VOLUME_ID="{volume_id}"
 export GAME_PORT="{game_port}"
 export MAX_SECONDS="{max_seconds}"
-export ENABLE_LOGGING="{str(enable_logging).lower()}"
+export ENABLE_LOGGING="{enable_logging}"
 export GITHUB_REPO="{github_repo}"
 
 # 4. bootstrap.sh laden

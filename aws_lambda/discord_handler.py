@@ -1,9 +1,8 @@
-import re
 import os
+import re
 import json
-import urllib.error
 import urllib.request
-from config import parse_start_args
+import urllib.error
 import hetzner
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -11,7 +10,6 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 
 def supabase_client_request(endpoint: str, method: str = "POST", data: dict = None, headers_extra: dict = None) -> tuple[int, str]:
-    """Führt REST-Aufrufe an Supabase mit der Standardbibliothek urllib aus."""
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("SUPABASE_URL oder SUPABASE_KEY in AWS Lambda nicht konfiguriert")
 
@@ -35,7 +33,8 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8") if e.fp else ""
         return e.code, err_body
-    
+
+
 def get_help_message() -> str:
     cache_path = os.path.join(os.path.dirname(__file__), "commands_cache.txt")
     if os.path.exists(cache_path):
@@ -47,12 +46,11 @@ def get_help_message() -> str:
         except Exception:
             pass
 
-    # Fallback, falls commands_cache.txt fehlt
     return (
         "📖 **Verfügbare Server-Befehle:**\n\n"
         "• `/start` — Startet den Server (Felder: `game`, `duration`, `log`)\n"
         "• `/status` — Zeigt alle aktiven Server samt IP an\n"
-        "• `/log` — Schaltet Live-Logs im Discord-Kanal ein/aus\n"
+        "• `/log <mode>` — Schaltet Logs um (`all`, `game`, `off`)\n"
         "• `/stop` — Stoppt und löscht den laufenden Server\n"
         "• `/addgameaccount` — Verknüpft deinen Ingame-Namen mit Discord\n"
         "• `/help` — Zeigt diese Übersicht an"
@@ -62,11 +60,9 @@ def get_help_message() -> str:
 def handle_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
 
-    # Type 1: Discord PING Check (Ack)
     if interaction_type == 1:
         return {"statusCode": 200, "body": {"type": 1}}
 
-    # Type 2: Application Command (Slash Commands)
     if interaction_type != 2:
         return {"statusCode": 400, "body": {"error": "Unsupported interaction type"}}
 
@@ -97,11 +93,9 @@ def handle_interaction(body: dict) -> dict:
             target_id = str(target.get("server_id"))
 
             try:
-                # Versuche den Graceful-Stop über den Port 8080 Agenten auf der VM
                 if hasattr(hetzner, "trigger_server_graceful_stop"):
                     hetzner.trigger_server_graceful_stop(target_ip, target_id)
                 else:
-                    # Direkter HTTP-Call an den Agenten falls kein Wrapper vorhanden
                     auth_secret = os.environ.get("AUTH_SECRET", "")
                     req = urllib.request.Request(
                         f"http://{target_ip}:8080/stop",
@@ -113,22 +107,24 @@ def handle_interaction(body: dict) -> dict:
                         pass
                 msg = f"🛑 **Shutdown für `{target['name']}` eingeleitet.** (Container sichern & VM löschen)"
             except Exception:
-                # Fallback: Direktes Löschen über die Hetzner Cloud API
                 hetzner.delete_server(target_id)
                 msg = f"🛑 **Server `{target['name']}` direkt via Hetzner-API gelöscht.**"
 
     elif command == "start":
         options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
-
-        # 1. Felder mit Standardwerten direkt auslesen (ohne Text-Parser)
         game = str(options.get("game", "minecraft")).strip().lower()
         duration_raw = str(options.get("duration", "5m")).strip().lower()
-        enable_logging = bool(options.get("log", False))
+        
+        # Log-Modus: none, game, all
+        log_mode = str(options.get("log", "none")).strip().lower()
+        if log_mode in ["true", "1"]:
+            log_mode = "game"
+        elif log_mode in ["false", "0"]:
+            log_mode = "none"
 
-        # 2. Reine Zeitumrechnung (Sekunden & Lesbarkeit)
         unit_map = {"m": 60, "h": 3600, "d": 86400}
         readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
-        
+
         match = re.match(r"^(\d+)([mhd])$", duration_raw)
         if match:
             val, unit = int(match.group(1)), match.group(2)
@@ -144,16 +140,16 @@ def handle_interaction(body: dict) -> dict:
                 seconds=seconds,
                 readable=readable,
                 server_type="cpx32",
-                enable_logging=enable_logging
+                enable_logging=log_mode
             )
             addr = f"`{res.get('domain')}` (IP: `{res.get('ip')}`)" if res.get("domain") else f"`{res.get('ip')}`"
-            log_status = "🟢 Aktiv" if enable_logging else "⚪ Aus"
+            log_labels = {"none": "⚪ Aus", "game": "🎮 Nur Game", "all": "📡 Alles (Game + System)"}
             msg = (
                 f"🟡 **Hardware wird hochgefahren!**\n"
                 f"🎮 **Spiel:** {res.get('game', '').upper()}\n"
                 f"🌐 **Adresse:** {addr}\n"
                 f"⏳ **Laufzeit:** {readable}\n"
-                f"📡 **Live-Logs:** {log_status}\n\n"
+                f"📋 **Live-Logs:** {log_labels.get(log_mode, log_mode)}\n\n"
                 f"*(Bereitschaftsmeldung folgt automatisch, sobald der Server beitretbar ist!)*"
             )
         except Exception as e:
@@ -164,21 +160,25 @@ def handle_interaction(body: dict) -> dict:
         if not servers:
             msg = "⚪ Kein aktiver Server online."
         else:
+            options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
+            mode = str(options.get("mode", "game")).strip().lower()
             target_ip = servers[0].get("ip")
             try:
                 auth_secret = os.environ.get("AUTH_SECRET", "")
+                payload = json.dumps({"mode": mode}).encode("utf-8")
                 req = urllib.request.Request(
                     f"http://{target_ip}:8080/toggle-log",
-                    data=b"",
-                    headers={"x-auth-token": auth_secret},
+                    data=payload,
+                    headers={"Content-Type": "application/json", "x-auth-token": auth_secret},
                     method="POST"
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     res_data = json.loads(resp.read().decode())
-                    state = "aktiviert" if res_data.get("logging") else "deaktiviert"
-                    msg = f"📡 **Live-Logs wurden {state}.**"
+                    cur_mode = res_data.get("mode", mode)
+                    msg = f"📡 **Live-Logs wurden umgestellt auf: `{cur_mode.upper()}`**"
             except Exception as e:
                 msg = f"⚠ Agent auf VM nicht erreichbar: {e}"
+
     elif command == "addgameaccount":
         user_data = body.get("member", {}).get("user") or body.get("user", {})
         discord_user_id = str(user_data.get("id"))
@@ -192,15 +192,12 @@ def handle_interaction(body: dict) -> dict:
             msg = "❌ Bitte gib Spiel und Ingame-Namen an: `/addgameaccount <game> <username>`"
         else:
             try:
-                # 1. User in dim_users upserten
-                status_u, resp_u = supabase_client_request(
+                supabase_client_request(
                     "dim_users",
                     method="POST",
                     data={"discord_user_id": discord_user_id, "discord_username": discord_username},
                     headers_extra={"Prefer": "resolution=merge-duplicates"}
                 )
-
-                # 2. Account in dim_game_accounts eintragen
                 status_a, resp_a = supabase_client_request(
                     "dim_game_accounts",
                     method="POST",
@@ -211,14 +208,12 @@ def handle_interaction(body: dict) -> dict:
                     },
                     headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
                 )
-
                 if status_a in [200, 201]:
                     msg = f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
                 else:
                     msg = f"⚠ Fehler beim Verknüpfen ({status_a}): {resp_a}"
             except Exception as e:
                 msg = f"❌ Datenbankfehler: {e}"
-
     else:
         msg = f"Unbekannter Befehl: `/{command}`"
 

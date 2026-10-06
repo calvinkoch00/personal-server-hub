@@ -9,7 +9,18 @@ load_dotenv("/mnt/gamespeicher/secrets.env")
 
 STATUS_WEBHOOK = os.environ.get("DISCORD_STATUS_WEBHOOK_URL")
 LOG_WEBHOOK = os.environ.get("DISCORD_LOG_WEBHOOK_URL") or STATUS_WEBHOOK
-LOG_FLAG_FILE = "/tmp/discord_logging_enabled"
+CONFIG_FILE = "/tmp/discord_log_mode"
+
+
+def get_log_mode() -> str:
+    """Modi: 'off', 'game', 'all'."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return f.read().strip().lower()
+        except Exception:
+            pass
+    return "off"
 
 
 def send_discord(url: str, text: str):
@@ -22,7 +33,6 @@ def send_discord(url: str, text: str):
 
 
 def wait_for_ready():
-    """Wartet auf das Minecraft Done-Signal."""
     for _ in range(120):
         time.sleep(2)
         try:
@@ -31,83 +41,65 @@ def wait_for_ready():
                 continue
             logs = subprocess.run(["docker", "logs", "--tail", "50", cid], capture_output=True, text=True)
             if "Done (" in (logs.stdout + logs.stderr):
-                send_discord(STATUS_WEBHOOK, "✅ **Minecraft Server ist spielbereit!** 🚀\nDu kannst jetzt connecten.")
+                send_discord(STATUS_WEBHOOK, "✅ **Minecraft Server ist spielbereit!**\nDu kannst jetzt connecten.")
                 break
         except Exception:
             pass
 
 
-def get_container_id() -> str | None:
-    try:
-        res = subprocess.check_output(["docker", "ps", "-q"], text=True).strip().split("\n")
-        return res[0] if res and res[0] else None
-    except Exception:
-        return None
-
-
 def stream_logs():
-    last_seen_timestamp = None
-
-    # Initialen Timestamp setzen, damit keine alten Boot-Logs gespammt werden
-    cid = get_container_id()
-    if cid:
-        init_run = subprocess.run(["docker", "logs", "-t", "--tail", "1", cid], capture_output=True, text=True)
-        init_lines = (init_run.stdout + init_run.stderr).strip().splitlines()
-        if init_lines:
-            last_seen_timestamp = init_lines[-1].split(" ")[0]
-
+    last_check = time.time()
     while True:
-        time.sleep(10)
-
-        # Wenn Logging deaktiviert ist, pausieren
-        if not os.path.exists(LOG_FLAG_FILE):
+        time.sleep(8)
+        mode = get_log_mode()
+        if mode == "off":
+            last_check = time.time()
             continue
 
-        cid = get_container_id()
-        if not cid:
-            continue
+        lines_to_send = []
+        now = time.time()
+        since_arg = str(int(last_check))
+        last_check = now
 
+        # 1. Game Container Logs
         try:
-            cmd = ["docker", "logs", "-t"]
-            if last_seen_timestamp:
-                cmd.extend(["--since", last_seen_timestamp])
-            cmd.append(cid)
+            cids = subprocess.check_output(["docker", "ps", "-q"], text=True).strip().split("\n")
+            if cids and cids[0]:
+                res = subprocess.run(
+                    ["docker", "logs", "--since", since_arg, cids[0]],
+                    capture_output=True,
+                    text=True
+                )
+                out = (res.stdout + res.stderr).strip()
+                if out:
+                    lines_to_send.extend([f"[GAME] {l}" for l in out.splitlines()])
+        except Exception:
+            pass
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            raw_lines = (result.stdout + result.stderr).splitlines()
+        # 2. System- & Service-Logs (nur bei mode == 'all')
+        if mode == "all":
+            try:
+                res = subprocess.run(
+                    ["journalctl", "-u", "gameserver-*", "--since", f"@{since_arg}", "--no-pager", "-q"],
+                    capture_output=True,
+                    text=True
+                )
+                sys_out = res.stdout.strip()
+                if sys_out:
+                    lines_to_send.extend([f"[SYS] {l}" for l in sys_out.splitlines()])
+            except Exception:
+                pass
 
-            new_lines_clean = []
-            for line in raw_lines:
-                if not line.strip():
-                    continue
-
-                parts = line.split(" ", 1)
-                ts = parts[0]
-                content = parts[1] if len(parts) > 1 else ""
-
-                # Zeilen überspringen, die wir schon exakt verarbeitet haben
-                if last_seen_timestamp and ts <= last_seen_timestamp:
-                    continue
-
-                new_lines_clean.append(content)
-                last_seen_timestamp = ts
-
-            # Nur senden, wenn auch tatsächlich neue Zeilen existieren
-            if new_lines_clean:
-                # Discord Message Limit einhalten (2000 Zeichen, max 15 Zeilen pro Batch)
-                chunk = "\n".join(new_lines_clean[-15:])
-                if len(chunk) > 1850:
-                    chunk = chunk[-1850:]
-                send_discord(LOG_WEBHOOK, f"📋 **Live-Logs:**\n```text\n{chunk}\n```")
-
-        except Exception as e:
-            print(f"[STREAMER] Fehler beim Log-Lesen: {e}")
+        if lines_to_send:
+            # Auf maximal 15 Zeilen pro Batch und 1800 Zeichen begrenzen
+            recent = lines_to_send[-15:]
+            chunk = "\n".join(recent)
+            if len(chunk) > 1800:
+                chunk = chunk[-1800:]
+            send_discord(LOG_WEBHOOK, f"```asciidoc\n{chunk}\n```")
 
 
 if __name__ == "__main__":
-    if "--enable-logging" in sys.argv:
-        with open(LOG_FLAG_FILE, "w") as f:
-            f.write("1")
-
-    wait_for_ready()
+    import threading
+    threading.Thread(target=wait_for_ready, daemon=True).start()
     stream_logs()

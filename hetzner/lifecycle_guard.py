@@ -10,7 +10,9 @@ load_dotenv("/mnt/gamespeicher/secrets.env")
 
 HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN")
 DISCORD_STATUS_WEBHOOK = os.environ.get("DISCORD_STATUS_WEBHOOK_URL")
+DISCORD_LOG_WEBHOOK = os.environ.get("DISCORD_LOG_WEBHOOK_URL") or DISCORD_STATUS_WEBHOOK
 MOUNT_DIR = os.environ.get("VOLUME_DIR", "/mnt/gamespeicher")
+FORCE_SHUTDOWN_FLAG = "/tmp/force_shutdown"
 
 
 def send_status(msg: str):
@@ -31,27 +33,64 @@ def get_hetzner_instance_id() -> str:
     return ""
 
 
-def execute_shutdown(server_id: str, start_time: float):
-    duration = int(time.time() - start_time)
-    send_status(f"🛑 **Laufzeit-Limit erreicht.** Server wird sauber beendet (Laufzeit: {duration // 60}m).")
+def flush_final_shutdown_logs():
+    """Sendet die letzten Container-Logs (z. B. Welt-Speicherung) vor dem Löschen an Discord."""
+    if not DISCORD_LOG_WEBHOOK:
+        return
 
-    print("[GUARD] 1. Stoppe Tracker-Dienst (damit offene Sessions finalisiert werden)...")
+    try:
+        res = subprocess.run(
+            ["docker", "ps", "-a", "-q"],
+            capture_output=True,
+            text=True
+        )
+        cids = res.stdout.strip().split("\n")
+        if not cids or not cids[0]:
+            return
+
+        cid = cids[0]
+        logs = subprocess.run(
+            ["docker", "logs", "--tail", "35", cid],
+            capture_output=True,
+            text=True
+        )
+        raw_text = logs.stdout + logs.stderr
+        if raw_text.strip():
+            chunk = raw_text[-1800:].strip()
+            msg = f"📋 **Finale Shutdown-Logs:**\n```asciidoc\n{chunk}\n```"
+            requests.post(DISCORD_LOG_WEBHOOK, json={"content": msg}, timeout=5)
+    except Exception as e:
+        print(f"[GUARD] Finaler Log-Flush fehlgeschlagen: {e}", flush=True)
+
+
+def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
+    duration = int(time.time() - start_time)
+    
+    if reason == "manual":
+        send_status(f"🛑 **Server-Stop via Discord ausgeführt.** Server wird beendet (Laufzeit: {duration // 60}m).")
+    else:
+        send_status(f"🛑 **Laufzeit-Limit erreicht.** Server wird sauber beendet (Laufzeit: {duration // 60}m).")
+
+    print("[GUARD] 1. Stoppe Tracker-Dienst (Sessions finalisieren)...", flush=True)
     subprocess.run(["systemctl", "stop", "gameserver-tracker.service"], check=False)
 
-    print("[GUARD] 2. Stoppe Docker-Container...")
+    print("[GUARD] 2. Stoppe Docker-Container sauber...", flush=True)
     subprocess.run(["docker", "compose", "-f", f"{MOUNT_DIR}/docker-compose.yml", "stop"], check=False)
     subprocess.run(["sync"], check=False)
 
-    print("[GUARD] 3. Unmounte Volume...")
+    print("[GUARD] 3. Sende finale Shutdown-Logs an Discord...", flush=True)
+    flush_final_shutdown_logs()
+
+    print("[GUARD] 4. Unmounte Volume...", flush=True)
     subprocess.run(["umount", MOUNT_DIR], check=False)
 
-    print(f"[GUARD] 4. Lösche Hetzner Server {server_id}...")
+    print(f"[GUARD] 5. Lösche Hetzner Server {server_id}...", flush=True)
     if server_id and HETZNER_API_TOKEN:
         headers = {"Authorization": f"Bearer {HETZNER_API_TOKEN}"}
         try:
             requests.delete(f"https://api.hetzner.cloud/v1/servers/{server_id}", headers=headers, timeout=10)
         except Exception as e:
-            print(f"[GUARD] Hetzner Delete Fehler: {e}")
+            print(f"[GUARD] Hetzner Delete Fehler: {e}", flush=True)
 
     os.system("shutdown -h now")
 
@@ -64,19 +103,30 @@ def main():
 
     start_time = time.time()
     server_id = get_hetzner_instance_id()
-    print(f"[GUARD] Gestartet. Server-ID: {server_id}, Max Seconds: {max_seconds}")
+    print(f"[GUARD] Gestartet. Server-ID: {server_id}, Max Seconds: {max_seconds}", flush=True)
 
     while True:
+        # 1. Sofortiger Shutdown-Trigger via Discord /stop
+        if os.path.exists(FORCE_SHUTDOWN_FLAG):
+            print("[GUARD] Manueller Stop über Discord (/stop) erkannt!", flush=True)
+            try:
+                os.remove(FORCE_SHUTDOWN_FLAG)
+            except Exception:
+                pass
+            execute_shutdown(server_id, start_time, reason="manual")
+            break
+
+        # 2. Timer-Ablauf prüfen
         elapsed = time.time() - start_time
         remaining = max_seconds - elapsed
 
         if remaining <= 0:
-            print("[GUARD] Zeit abgelaufen! Leite Shutdown ein...")
-            execute_shutdown(server_id, start_time)
+            print("[GUARD] Zeit abgelaufen! Leite automatischen Shutdown ein...", flush=True)
+            execute_shutdown(server_id, start_time, reason="limit")
             break
 
         if int(elapsed) % 60 == 0:
-            print(f"[GUARD] Noch {int(remaining)} Sekunden verbleibend.")
+            print(f"[GUARD] Noch {int(remaining)} Sekunden verbleibend.", flush=True)
 
         time.sleep(1)
 
