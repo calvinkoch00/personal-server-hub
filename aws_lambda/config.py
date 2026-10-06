@@ -68,16 +68,20 @@ def get_cloud_init_script(max_seconds: int = 300, volume_id: int = 107045799) ->
 runcmd:
   - |
     set -e
+    # 1. Docker sicherstellen
     if ! command -v docker &> /dev/null; then
       curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
       sh /tmp/get-docker.sh
     fi
 
+    # 2. Volume mounten
     mkdir -p /mnt/gamespeicher
     mount -o discard,defaults /dev/disk/by-id/scsi-0HC_Volume_{volume_id} /mnt/gamespeicher
 
+    # 3. Agenten SOFORT starten (sendet Discord Ready & startet Timer)
+    python3 /mnt/gamespeicher/agent.py --max-seconds {max_seconds} &
+
+    # 4. Minecraft-Container starten
     cd /mnt/gamespeicher
     docker compose up -d
-
-    python3 /mnt/gamespeicher/agent.py --max-seconds {max_seconds} &
 """
