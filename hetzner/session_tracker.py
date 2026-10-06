@@ -19,6 +19,7 @@ MOUNT_DIR = os.environ.get("VOLUME_DIR", "/mnt/gamespeicher")
 GAME_NAME = os.environ.get("GAME_NAME", "minecraft").lower()
 
 CACHE_FILE = os.path.join(MOUNT_DIR, "session_cache.json")
+SERVER_RUN_CACHE = os.path.join(MOUNT_DIR, "server_run.json")
 
 JOIN_REGEX = re.compile(
     r"UUID of player (?P<player>[a-zA-Z0-9_]{3,16}) is|"
@@ -73,7 +74,7 @@ def supabase_upsert_sessions(sessions: list[dict]) -> bool:
     if not sessions or not (SUPABASE_URL and SUPABASE_KEY):
         return True
 
-    # duration_seconds entfernen, da es eine DB-generierte Spalte ist:
+    # Generated column duration_seconds entfernen
     cleaned_sessions = []
     for s in sessions:
         entry = dict(s)
@@ -99,6 +100,7 @@ def supabase_upsert_sessions(sessions: list[dict]) -> bool:
 
     return False
 
+
 def lookup_discord_user(ingame_username: str) -> tuple[str | None, str | None]:
     """Sucht Verknüpfung in dim_game_accounts."""
     if not (SUPABASE_URL and SUPABASE_KEY):
@@ -123,16 +125,6 @@ def lookup_discord_user(ingame_username: str) -> tuple[str | None, str | None]:
 # Session Management & Cache Logik
 # ==========================================
 
-def calculate_duration(joined_at_str: str, end_at_str: str) -> int:
-    """Berechnet die Spieldauer in vollen Sekunden."""
-    try:
-        t_start = datetime.datetime.fromisoformat(joined_at_str)
-        t_end = datetime.datetime.fromisoformat(end_at_str)
-        return max(0, int((t_end - t_start).total_seconds()))
-    except Exception:
-        return 0
-
-
 def flush_cache_to_supabase():
     """Gleicht Cache mit Supabase ab und löscht beendete Sessions."""
     with lock:
@@ -145,40 +137,58 @@ def flush_cache_to_supabase():
 
         success = supabase_upsert_sessions(all_sessions)
         if success:
-            # Nur beendete Sessions aus dem lokalen Cache entfernen
             cleaned_cache = {}
             for sid, sdata in cache.items():
                 if sdata.get("left_at") is None:
-                    cleaned_cache[sid] = sdata  # noch aktiv -> behalten
+                    cleaned_cache[sid] = sdata
 
             removed_count = len(cache) - len(cleaned_cache)
             save_cache(cleaned_cache)
-            print(f"[SYNC] Erfolgreich! {removed_count} beendete Sessions aus lokalem Cache gelöscht. ({len(cleaned_cache)} aktive verbleiben)", flush=True)
+            print(f"[SYNC] Erfolgreich! {removed_count} beendete Sessions bereinigt. ({len(cleaned_cache)} aktiv)", flush=True)
         else:
-            print("[SYNC] Abgleich fehlgeschlagen. Cache bleibt unverändert für nächsten Versuch erhalten.", flush=True)
+            print("[SYNC] Abgleich fehlgeschlagen. Cache bleibt erhalten.", flush=True)
 
 
 def recover_orphan_sessions_on_boot():
-    """Wird beim Start ausgeführt: Prüft alte Sessions von früheren Crashes."""
+    """Prüft beim Start alte Sessions und alte Server-Runs von früheren Abstürzen."""
+    # 1. Spieler-Sessions prüfen
     with lock:
         cache = load_cache()
-        if not cache:
-            return
+        if cache:
+            print(f"[BOOT-RECOVERY] {len(cache)} Session(s) im lokalen Cache gefunden. Prüfe Integrität...", flush=True)
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        print(f"[BOOT-RECOVERY] {len(cache)} Session(s) im lokalen Cache gefunden. Prüfe Integrität...", flush=True)
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            for sid, sdata in cache.items():
+                if sdata.get("left_at") is None:
+                    end_iso = sdata.get("fallback_end_at") or now_iso
+                    sdata["left_at"] = end_iso
+                    sdata["close_reason"] = "crash_recovery"
 
-        # Offene Sessions von früher schließen (waren durch Crash nicht beendet worden)
-        for sid, sdata in cache.items():
-            if sdata.get("left_at") is None:
-                end_iso = sdata.get("fallback_end_at") or now_iso
-                sdata["left_at"] = end_iso
-                sdata["close_reason"] = "crash_recovery"
-                sdata["duration_seconds"] = calculate_duration(sdata.get("joined_at", end_iso), end_iso)
-
-        save_cache(cache)
+            save_cache(cache)
 
     flush_cache_to_supabase()
+
+    # 2. Frühere gecrashte Server-Runs prüfen
+    if os.path.exists(SERVER_RUN_CACHE) and (SUPABASE_URL and SUPABASE_KEY):
+        try:
+            with open(SERVER_RUN_CACHE, "r", encoding="utf-8") as f:
+                run_data = json.load(f)
+            
+            s_id = run_data.get("hetzner_server_id")
+            end_iso = run_data.get("fallback_end_at")
+            if s_id and end_iso:
+                print(f"[BOOT-RECOVERY] Unvollendeten Server-Run {s_id} gefunden. Schließe in Supabase...", flush=True)
+                url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/fact_server_runs?hetzner_server_id=eq.{s_id}"
+                headers = {
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json"
+                }
+                requests.patch(url, json={"stopped_at": end_iso, "close_reason": "crash_recovery"}, headers=headers, timeout=5)
+            
+            os.remove(SERVER_RUN_CACHE)
+        except Exception as e:
+            print(f"[BOOT-RECOVERY] Fehler beim Server-Run Recovery: {e}", flush=True)
 
 
 def on_player_join(player_name: str):
@@ -201,8 +211,7 @@ def on_player_join(player_name: str):
             "joined_at": now_iso,
             "fallback_end_at": now_iso,
             "left_at": None,
-            "close_reason": None,
-            "duration_seconds": None
+            "close_reason": None
         }
 
         cache = load_cache()
@@ -225,9 +234,8 @@ def on_player_leave(player_name: str, reason: str = "disconnect"):
             entry["left_at"] = now_iso
             entry["fallback_end_at"] = now_iso
             entry["close_reason"] = reason
-            entry["duration_seconds"] = calculate_duration(entry.get("joined_at", now_iso), now_iso)
             save_cache(cache)
-            print(f"[TRACKER] - Leave: {player_name} ({reason}) -> Im Cache als beendet markiert (Dauer: {entry['duration_seconds']}s)", flush=True)
+            print(f"[TRACKER] - Leave: {player_name} ({reason}) -> Im Cache als beendet markiert", flush=True)
 
 
 def heartbeat_tick():
@@ -261,7 +269,6 @@ def periodic_sync_and_heartbeat_loop():
         counter += 1
         heartbeat_tick()
 
-        # Alle 10 Minuten (10 * 60s)
         if counter % 10 == 0:
             flush_cache_to_supabase()
 
@@ -341,10 +348,9 @@ def main():
 
     print(f"[TRACKER] Starte robusten Session-Tracker (Offline-Cache & 10m-Sync) für: {GAME_NAME}", flush=True)
 
-    # 1. Boot-Recovery: Evtl. gecachte Reste alter Sessions abgleichen
+    # Boot-Recovery: Spieler-Sessions & gecrashte Server-Runs abgleichen
     recover_orphan_sessions_on_boot()
 
-    # 2. Worker starten
     threading.Thread(target=tail_minecraft_logs, daemon=True).start()
     threading.Thread(target=periodic_sync_and_heartbeat_loop, daemon=True).start()
 

@@ -1,11 +1,44 @@
 import os
 import json
+import datetime
 import urllib.request
 import urllib.error
 from config import HETZNER_API_TOKEN, get_stage1_bootloader, get_game_config
 from dns import update_godaddy_dns
 
 BASE_URL = "https://api.hetzner.cloud/v1"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+
+def _log_server_start_to_supabase(server_id: int, game: str, server_type: str):
+    """Protokolliert den neu gestarteten Serverlauf in fact_server_runs."""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return
+
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/fact_server_runs"
+    payload = {
+        "hetzner_server_id": server_id,
+        "game": game,
+        "server_type": server_type,
+        "started_at": now_iso,
+        "fallback_end_at": now_iso
+    }
+    encoded = json.dumps(payload).encode("utf-8")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+
+    try:
+        req = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except Exception as e:
+        print(f"[SUPABASE ERROR] Serverlauf konnte nicht protokolliert werden: {e}")
 
 
 def _request(endpoint: str, method: str = "GET", data: dict | None = None) -> dict:
@@ -59,6 +92,7 @@ def create_server(
     server_ip = server_data["public_net"]["ipv4"]["ip"]
 
     update_godaddy_dns(server_ip)
+    _log_server_start_to_supabase(server_data["id"], game, resolved_type)
 
     return {
         "server_id": server_data["id"],
