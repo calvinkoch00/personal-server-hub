@@ -9,7 +9,8 @@ load_dotenv("/mnt/gamespeicher/secrets.env")
 AUTH_SECRET = os.environ.get("AUTH_SECRET")
 STATUS_WEBHOOK = os.environ.get("DISCORD_STATUS_WEBHOOK_URL")
 LOG_WEBHOOK = os.environ.get("DISCORD_LOG_WEBHOOK_URL") or STATUS_WEBHOOK
-LOG_FLAG_FILE = "/tmp/discord_logging_enabled"
+CONFIG_FILE = "/tmp/discord_log_mode"
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, status_code: int, data: dict):
@@ -19,21 +20,35 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
     def do_POST(self):
-        # 1. Externer Toggle für Discord Live-Logging (/log Befehl via Lambda)
+        # 1. Umschalten für Discord Live-Logging (/log Befehl via Lambda)
         if self.path == "/toggle-log":
             if self.headers.get("x-auth-token") != AUTH_SECRET:
                 self._send_json(401, {"error": "Unauthorized"})
                 return
 
-            if os.path.exists(LOG_FLAG_FILE):
-                os.remove(LOG_FLAG_FILE)
-                enabled = False
-            else:
-                with open(LOG_FLAG_FILE, "w") as f:
-                    f.write("1")
-                enabled = True
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
+                payload = json.loads(body)
+                mode = payload.get("mode", "game").lower()
+            except Exception:
+                mode = "game"
 
-            self._send_json(200, {"logging": enabled})
+            if mode not in ["all", "game", "off"]:
+                mode = "game"
+
+            with open(CONFIG_FILE, "w") as f:
+                f.write(mode)
+
+            # Abwärtskompatibilität: Legacy Flag-Datei aktualisieren
+            legacy_flag = "/tmp/discord_logging_enabled"
+            if mode != "off":
+                with open(legacy_flag, "w") as f:
+                    f.write("1")
+            elif os.path.exists(legacy_flag):
+                os.remove(legacy_flag)
+
+            self._send_json(200, {"mode": mode, "logging": mode != "off"})
             return
 
         # 2. Lokale Log-API für Gameserver-Plugins & interne Programme
@@ -75,6 +90,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(404, {"error": "Not found"})
+
 
 if __name__ == "__main__":
     print("[CONTROL-API] Starte HTTP-Server auf Port 8080...")
