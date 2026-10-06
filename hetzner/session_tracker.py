@@ -73,6 +73,13 @@ def supabase_upsert_sessions(sessions: list[dict]) -> bool:
     if not sessions or not (SUPABASE_URL and SUPABASE_KEY):
         return True
 
+    # duration_seconds entfernen, da es eine DB-generierte Spalte ist:
+    cleaned_sessions = []
+    for s in sessions:
+        entry = dict(s)
+        entry.pop("duration_seconds", None)
+        cleaned_sessions.append(entry)
+
     url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/fact_player_sessions"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -82,7 +89,7 @@ def supabase_upsert_sessions(sessions: list[dict]) -> bool:
     }
 
     try:
-        r = requests.post(url, json=sessions, headers=headers, timeout=10)
+        r = requests.post(url, json=cleaned_sessions, headers=headers, timeout=10)
         if r.status_code in [200, 201]:
             return True
         else:
@@ -91,7 +98,6 @@ def supabase_upsert_sessions(sessions: list[dict]) -> bool:
         print(f"[SUPABASE SYNC ERROR] Netzwerkfehler: {e}", flush=True)
 
     return False
-
 
 def lookup_discord_user(ingame_username: str) -> tuple[str | None, str | None]:
     """Sucht Verknüpfung in dim_game_accounts."""
