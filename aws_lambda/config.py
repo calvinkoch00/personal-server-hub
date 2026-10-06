@@ -3,85 +3,86 @@ import re
 
 HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN")
 LOCATION = os.environ.get("LOCATION", "nbg1")
-AUTH_SECRET = os.environ.get("AUTH_SECRET")
+AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY")
 DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID")
+DISCORD_STATUS_WEBHOOK_URL = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", "")
+
+# Supabase Secrets
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+# GitHub Konfiguration
+GITHUB_REPO_RAW = os.environ.get("GITHUB_REPO_RAW", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DEFAULT_GAME = "minecraft"
 DEFAULT_LIFETIME_SECONDS = 300
 MAX_LIFETIME_SECONDS = 7 * 24 * 3600
 
-VOLUME_MAPPING = {
-    "minecraft": os.environ.get("VOLUME_ID_MINECRAFT", os.environ.get("VOLUME_ID", "107045799")),
+GAME_CONFIG = {
+    "minecraft": {
+        "volume_id": int(os.environ.get("VOLUME_ID_MINECRAFT", os.environ.get("VOLUME_ID", "107045799"))),
+        "port": 25565
+    }
 }
 
-def get_volume_for_game(game: str) -> tuple[int, str] | None:
+
+def get_game_config(game: str) -> tuple[int, int, str] | None:
     game_lower = game.lower().strip()
-    vol_id = VOLUME_MAPPING.get(game_lower)
-    if not vol_id:
+    cfg = GAME_CONFIG.get(game_lower)
+    if not cfg:
         return None
-    return int(vol_id), game_lower
+    return cfg["volume_id"], cfg["port"], game_lower
 
-def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
-    if not raw_input or not raw_input.strip():
-        return DEFAULT_GAME, DEFAULT_LIFETIME_SECONDS, "5 Minute(n)"
 
-    parts = raw_input.strip().lower().split()
-    duration_str = None
-    game = DEFAULT_GAME
-
-    for part in parts:
-        if re.match(r"^\d+[mhd]?$", part):
-            duration_str = part
-        else:
-            game = part
-
-    if not duration_str:
-        return game, DEFAULT_LIFETIME_SECONDS, "5 Minute(n)"
-
-    match = re.match(r"^(\d+)([mhd])?$", duration_str)
-    if not match:
-        return game, DEFAULT_LIFETIME_SECONDS, "5 Minute(n)"
-
-    val = int(match.group(1))
-    unit = match.group(2) or "h"
-
-    if unit == "m":
-        seconds = val * 60
-        readable = f"{val} Minute(n)"
-    elif unit == "d":
-        seconds = val * 86400
-        readable = f"{val} Tag(e)"
-    else:
-        seconds = val * 3600
-        readable = f"{val} Stunde(n)"
-
-    if seconds > MAX_LIFETIME_SECONDS:
-        return game, MAX_LIFETIME_SECONDS, "7 Tage (Maximum)"
-    if seconds < 60:
-        return game, 60, "1 Minute (Minimum)"
-
-    return game, seconds, readable
-
-def get_cloud_init_script(max_seconds: int = 300, volume_id: int = 107045799) -> str:
+def get_stage1_bootloader(volume_id: int, game_port: int, max_seconds: int = 300) -> str:
+    """Stage-1 Bootloader: Schreibt Secrets, setzt Variablen und führt bootstrap.sh aus."""
+    auth_header = f'-H "Authorization: token {GITHUB_TOKEN}"' if GITHUB_TOKEN else ""
+    
     return f"""#cloud-config
 runcmd:
   - |
-    set -e
-    # 1. Docker sicherstellen
-    if ! command -v docker &> /dev/null; then
-      curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-      sh /tmp/get-docker.sh
+    set -eu
+    
+    # 1. Volume frühzeitig einhängen, damit secrets.env geschrieben werden kann
+    mkdir -p /mnt/gamespeicher
+    VOLUME_DEV="/dev/disk/by-id/scsi-0HC_Volume_{volume_id}"
+    
+    for i in {{1..30}}; do
+      if [ -b "${{VOLUME_DEV}}" ]; then
+        break
+      fi
+      sleep 1
+    done
+    
+    if ! mountpoint -q /mnt/gamespeicher; then
+      mount -o discard,defaults "${{VOLUME_DEV}}" /mnt/gamespeicher
     fi
 
-    # 2. Volume mounten
-    mkdir -p /mnt/gamespeicher
-    mount -o discard,defaults /dev/disk/by-id/scsi-0HC_Volume_{volume_id} /mnt/gamespeicher
+    # 2. Secrets zentral aus Lambda injizieren (chmod 600 schützt vor unberechtigtem Lesen)
+    cat << 'EOF_SECRETS' > /mnt/gamespeicher/secrets.env
+AUTH_SECRET="{AUTH_SECRET}"
+HETZNER_API_TOKEN="{HETZNER_API_TOKEN}"
+DISCORD_STATUS_WEBHOOK_URL="{DISCORD_STATUS_WEBHOOK_URL}"
+SUPABASE_URL="{SUPABASE_URL}"
+SUPABASE_KEY="{SUPABASE_KEY}"
+EOF_SECRETS
+    chmod 600 /mnt/gamespeicher/secrets.env
 
-    # 3. Agenten SOFORT starten (sendet Discord Ready & startet Timer)
-    python3 /mnt/gamespeicher/agent.py --max-seconds {max_seconds} &
+    # 3. Stage-2 Umgebungsvariablen setzen
+    export VOLUME_ID="{volume_id}"
+    export GAME_PORT="{game_port}"
+    export MAX_SECONDS="{max_seconds}"
+    export GITHUB_REPO="{GITHUB_REPO_RAW}"
+    export GITHUB_TOKEN="{GITHUB_TOKEN}"
 
-    # 4. Minecraft-Container starten
-    cd /mnt/gamespeicher
-    docker compose up -d
+    # 4. bootstrap.sh laden und ausführen
+    mkdir -p /opt/bootstrap
+    curl -sSL -H "Cache-Control: no-cache" {auth_header} \\
+      "${{GITHUB_REPO}}/hetzner/bootstrap.sh?ts=$(date +%s)" \\
+      -o /opt/bootstrap/bootstrap.sh
+
+    chmod +x /opt/bootstrap/bootstrap.sh
+    exec /opt/bootstrap/bootstrap.sh
 """

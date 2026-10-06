@@ -6,8 +6,8 @@ from config import (
     HETZNER_API_TOKEN,
     LOCATION,
     AUTH_SECRET,
-    get_volume_for_game,
-    get_cloud_init_script,
+    get_game_config,
+    get_stage1_bootloader,
     DEFAULT_GAME
 )
 
@@ -60,11 +60,11 @@ def update_godaddy_dns(ip: str):
 
 
 def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = "5 Minute(n)", server_type: str = "cpx32") -> dict:
-    volume_info = get_volume_for_game(game)
-    if not volume_info:
-        raise ValueError(f"Für das Spiel '{game}' ist kein Volume konfiguriert.")
+    config_info = get_game_config(game)
+    if not config_info:
+        raise ValueError(f"Für das Spiel '{game}' ist kein Volume/Port konfiguriert.")
 
-    volume_id, clean_game = volume_info
+    volume_id, game_port, clean_game = config_info
     server_name = f"{clean_game}-ondemand"
 
     payload = {
@@ -75,7 +75,7 @@ def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = 
         "start_after_create": True,
         "volumes": [int(volume_id)],
         "ssh_keys": [],
-        "user_data": get_cloud_init_script(max_seconds=seconds, volume_id=volume_id)
+        "user_data": get_stage1_bootloader(volume_id=volume_id, game_port=game_port, max_seconds=seconds)
     }
 
     res = _request("servers", method="POST", data=payload)
