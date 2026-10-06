@@ -7,7 +7,6 @@ GODADDY_API_SECRET = os.environ.get("GODADDY_API_SECRET")
 GODADDY_DOMAIN = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
 GODADDY_SUBDOMAIN = os.environ.get("GODADDY_SUBDOMAIN", "mc")
 
-
 def update_godaddy_dns(ip: str):
     """Aktualisiert den A-Record bei GoDaddy auf die neue Server-IP."""
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:

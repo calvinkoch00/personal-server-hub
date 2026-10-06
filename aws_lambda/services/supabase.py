@@ -1,5 +1,4 @@
 import os
-import re
 import json
 import urllib.request
 import urllib.error
@@ -7,8 +6,7 @@ import urllib.error
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-
-def supabase_client_request(endpoint: str, method: str = "POST", data: dict = None, headers_extra: dict = None) -> tuple[int, str]:
+def supabase_client_request(endpoint: str, method: str = "POST", data: dict | None = None, headers_extra: dict | None = None) -> tuple[int, str]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("SUPABASE_URL oder SUPABASE_KEY in AWS Lambda nicht konfiguriert")
 
@@ -33,57 +31,32 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
         err_body = e.read().decode("utf-8") if e.fp else ""
         return e.code, err_body
 
-def upsert_game_account(discord_user_id: str, discord_username: str, game: str, ingame_username: str) -> dict:
-    """Schreibt Benutzer und Ingame-Account in das Supabase Star-Schema."""
-    # 1. User anlegen / aktualisieren
-    supabase_client_request(
-        "dim_users",
-        method="POST",
-        data={"discord_user_id": str(discord_user_id), "discord_username": str(discord_username)},
-        headers_extra={"Prefer": "resolution=merge-duplicates"}
-    )
+def log_server_start_to_supabase(server_id: int, game: str, server_type: str):
+    """Protokolliert den neu gestarteten Serverlauf in fact_server_runs."""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return
 
-    # 2. Account verknüpfen
-    status, resp = supabase_client_request(
-        "dim_game_accounts",
-        method="POST",
-        data={
-            "discord_user_id": str(discord_user_id),
-            "game": game.strip().lower(),
-            "ingame_username": ingame_username.strip()
-        },
-        headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
-    )
-    return json.loads(resp) if status in [200, 201] else {"error": resp}
+    import datetime
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/fact_server_runs"
+    payload = {
+        "hetzner_server_id": server_id,
+        "game": game,
+        "server_type": server_type,
+        "started_at": now_iso,
+        "fallback_end_at": now_iso
+    }
+    encoded = json.dumps(payload).encode("utf-8")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
 
-
-def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
-    val = (user_param or "").strip()
-    if not val or val.lower() == "me":
-        return caller_id, "me"
-
-    mention_match = re.match(r"^<@!?(\d+)>$", val)
-    if mention_match:
-        uid = mention_match.group(1)
-        return uid, f"<@{uid}>"
-
-    if val.isdigit():
-        return val, val
-
-    username_clean = val.lstrip("@")
-    status, resp = supabase_client_request(f"dim_users?discord_username=ilike.{username_clean}&select=discord_user_id,discord_username", method="GET")
-    if status == 200:
-        rows = json.loads(resp)
-        if rows:
-            return str(rows[0]["discord_user_id"]), rows[0].get("discord_username", username_clean)
-
-    return None, val
-
-
-def is_user_admin(discord_user_id: str) -> bool:
-    status, resp = supabase_client_request(f"dim_users?discord_user_id=eq.{discord_user_id}&select=role", method="GET")
-    if status == 200:
-        records = json.loads(resp)
-        if records and records[0].get("role") == "admin":
-            return True
-    return False
+    try:
+        req = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except Exception as e:
+        print(f"[SUPABASE ERROR] Serverlauf konnte nicht protokolliert werden: {e}")

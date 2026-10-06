@@ -1,8 +1,7 @@
 import json
 from services.auth import is_authorized, verify_discord_signature
 import discord_api
-from rest_api import handle_rest_request
-
+import rest_api
 
 def json_response(status_code: int, body: dict) -> dict:
     return {
@@ -15,7 +14,6 @@ def json_response(status_code: int, body: dict) -> dict:
         "body": json.dumps(body)
     }
 
-
 def lambda_handler(event, context):
     headers = event.get("headers", {}) or {}
     raw_body = event.get("body", "") or ""
@@ -27,7 +25,7 @@ def lambda_handler(event, context):
     if http_method == "OPTIONS":
         return json_response(200, {"message": "CORS OK"})
 
-    # 1. Discord Webhook Route
+    # 1. Discord Webhook Entrypoint (Signaturprüfung & Routing)
     if "x-signature-ed25519" in headers or "X-Signature-Ed25519" in headers:
         if not verify_discord_signature(headers, raw_body):
             return json_response(401, {"error": "Invalid Discord Signature"})
@@ -37,7 +35,7 @@ def lambda_handler(event, context):
         except Exception as e:
             return json_response(500, {"error": str(e)})
 
-    # 2. REST API Route (Token Auth)
+    # 2. REST API Entrypoint (Token Auth erforderlich)
     if not is_authorized(headers):
         return json_response(401, {"error": "Unauthorized"})
 
@@ -50,7 +48,7 @@ def lambda_handler(event, context):
             pass
 
     try:
-        status_code, response_data = handle_rest_request(raw_path, body)
-        return json_response(status_code, response_data)
+        status_code, resp_body = rest_api.route_request(raw_path, body)
+        return json_response(status_code, resp_body)
     except Exception as e:
         return json_response(500, {"error": str(e)})

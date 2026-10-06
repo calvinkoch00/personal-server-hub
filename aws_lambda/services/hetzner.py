@@ -1,45 +1,12 @@
 import os
 import json
-import datetime
 import urllib.request
 import urllib.error
 from config import HETZNER_API_TOKEN, get_stage1_bootloader, get_game_config
-from dns import update_godaddy_dns
+from services.dns import update_godaddy_dns
+from services.supabase import log_server_start_to_supabase
 
 BASE_URL = "https://api.hetzner.cloud/v1"
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-
-def _log_server_start_to_supabase(server_id: int, game: str, server_type: str):
-    """Protokolliert den neu gestarteten Serverlauf in fact_server_runs."""
-    if not (SUPABASE_URL and SUPABASE_KEY):
-        return
-
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/fact_server_runs"
-    payload = {
-        "hetzner_server_id": server_id,
-        "game": game,
-        "server_type": server_type,
-        "started_at": now_iso,
-        "fallback_end_at": now_iso
-    }
-    encoded = json.dumps(payload).encode("utf-8")
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates"
-    }
-
-    try:
-        req = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=5):
-            pass
-    except Exception as e:
-        print(f"[SUPABASE ERROR] Serverlauf konnte nicht protokolliert werden: {e}")
-
 
 def _request(endpoint: str, method: str = "GET", data: dict | None = None) -> dict:
     url = f"{BASE_URL}/{endpoint.lstrip('/')}"
@@ -56,7 +23,6 @@ def _request(endpoint: str, method: str = "GET", data: dict | None = None) -> di
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8") if e.fp else ""
         raise RuntimeError(f"Hetzner API {e.code}: {err_body}")
-
 
 def create_server(
     game: str = "minecraft",
@@ -92,7 +58,7 @@ def create_server(
     server_ip = server_data["public_net"]["ipv4"]["ip"]
 
     update_godaddy_dns(server_ip)
-    _log_server_start_to_supabase(server_data["id"], game, resolved_type)
+    log_server_start_to_supabase(server_data["id"], game, resolved_type)
 
     return {
         "server_id": server_data["id"],
@@ -104,7 +70,6 @@ def create_server(
         "server_type": resolved_type,
         "status": server_data["status"]
     }
-
 
 def list_servers() -> list[dict]:
     res = _request("servers", method="GET")
@@ -120,7 +85,6 @@ def list_servers() -> list[dict]:
         for s in res.get("servers", [])
     ]
 
-
 def get_server_status(server_id: str) -> dict:
     res = _request(f"servers/{server_id}", method="GET")
     server = res.get("server", {})
@@ -129,7 +93,6 @@ def get_server_status(server_id: str) -> dict:
         "status": server.get("status"),
         "ip": server.get("public_net", {}).get("ipv4", {}).get("ip")
     }
-
 
 def delete_server(server_id: str) -> dict:
     res = _request(f"servers/{server_id}", method="DELETE")

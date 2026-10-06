@@ -1,10 +1,118 @@
 import json
-from services.supabase import supabase_client_request, resolve_discord_user_id, is_user_admin
+import rest_api
+from commands.finance import resolve_discord_user_id
+from services.supabase import supabase_client_request
 
+def handle_account(data: dict, caller_id: str) -> str:
+    options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
+    user_param = str(options.get("user", "me")).strip()
 
-def handle_addgameaccount(body: dict, data: dict) -> str:
-    caller_data = body.get("member", {}).get("user") or body.get("user", {})
-    discord_user_id = str(caller_data.get("id"))
+    if user_param.lower() == "all":
+        status, resp = rest_api.handle_account({"user": "all"})
+        if status != 200:
+            return resp.get("error", "Fehler")
+
+        rows = resp.get("rows", [])
+        if not rows:
+            return "ℹ️ Noch keine Kontobewegungen vorhanden."
+
+        header = "💳 **Übersicht aller Benutzer-Kontostände**\n"
+        table = "```asciidoc\n"
+        table += f"{'Spieler':<14} | {'Bezahlt':<8} | {'Kosten':<8} | {'Saldo'}\n"
+        table += "-" * 42 + "\n"
+        for r in rows:
+            name = str(r.get("discord_username") or "Unknown")[:13]
+            paid = f"{float(r.get('total_paid_eur', 0)):.2f}€"
+            cost = f"{float(r.get('total_cost_gross_eur', 0)):.2f}€"
+            bal = float(r.get("current_balance_eur", 0))
+            icon = "+" if bal >= 0 else ""
+            table += f"{name:<14} | {paid:<8} | {cost:<8} | {icon}{bal:.2f}€\n"
+        table += "```"
+        return header + table
+    else:
+        target_uid, display_name = resolve_discord_user_id(user_param, caller_id)
+        if not target_uid:
+            return f"❌ Nutzer `{user_param}` konnte nicht gefunden werden."
+
+        status, resp = rest_api.handle_account({"user": "single", "target_uid": target_uid})
+        if status != 200:
+            return resp.get("error", "Fehler")
+
+        r = resp.get("user")
+        if not r:
+            return f"ℹ️ Für <@{target_uid}> wurden bisher keine Daten oder Spielzeiten erfasst."
+
+        uname = r.get("discord_username") or display_name
+        paid_eur = float(r.get("total_paid_eur", 0))
+        paid_chf = float(r.get("total_paid_chf", 0))
+        hours = float(r.get("total_hours_played", 0))
+        cost_gross = float(r.get("total_cost_gross_eur", 0))
+        balance = float(r.get("current_balance_eur", 0))
+
+        status_emoji = "🟢" if balance >= 0 else "🔴"
+        status_label = "Guthaben" if balance >= 0 else "Offener Betrag (Schulden)"
+        chf_note = f" (davon {paid_chf:.2f} CHF)" if paid_chf > 0 else ""
+
+        return (
+            f"💳 **Kontostand für `{uname}`**\n\n"
+            f"• Eingezahlt: `{paid_eur:.2f} €`{chf_note}\n"
+            f"• Verursachte Serverkosten: `{cost_gross:.2f} €` *({hours:.1f}h Spielzeit inkl. 8.1% MWST)*\n"
+            f"• **{status_label}: {balance:+.2f} €** {status_emoji}"
+        )
+
+def handle_cash(data: dict, caller_id: str, caller_name: str) -> str:
+    status_role, resp_role = supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
+    is_admin = False
+    if status_role == 200:
+        user_records = json.loads(resp_role)
+        if user_records and user_records[0].get("role") == "admin":
+            is_admin = True
+
+    if not is_admin:
+        return "⛔ **Zugriff verweigert:** Nur Administratoren dürfen diesen Befehl ausführen."
+
+    suboptions = data.get("options", [])
+    add_opts = suboptions[0].get("options", []) if suboptions and suboptions[0].get("name") == "add" else suboptions
+    opts_map = {o["name"]: o.get("value") for o in add_opts}
+
+    target_user_raw = str(opts_map.get("user", "")).strip()
+    amount_raw = opts_map.get("amount")
+    currency = str(opts_map.get("currency", "CHF")).strip().upper()
+    note = str(opts_map.get("note", "Einzahlung"))
+
+    target_uid, _ = resolve_discord_user_id(target_user_raw, caller_id)
+
+    if not target_uid:
+        return f"❌ Empfänger `{target_user_raw}` konnte nicht in der Datenbank gefunden werden."
+    if not amount_raw or float(amount_raw) <= 0:
+        return "❌ Bitte gib einen gültigen Betrag größer als 0 an."
+    if currency not in ["CHF", "EUR"]:
+        return "❌ Bitte als Währung entweder `CHF` oder `EUR` angeben."
+
+    status, resp = rest_api.handle_cash({
+        "target_uid": target_uid,
+        "amount": amount_raw,
+        "currency": currency,
+        "note": note,
+        "created_by": caller_name
+    })
+
+    if status != 200:
+        return f"⚠ {resp.get('error')}"
+
+    payment = resp["payment"]
+    fx_text = resp["fx_text"]
+
+    return (
+        f"✅ **Zahlung erfolgreich verbucht!**\n"
+        f"• Nutzer: <@{target_uid}>\n"
+        f"• Erhaltener Betrag: `{payment['amount_original']:.2f} {payment['currency']}`\n"
+        f"• Gutgeschrieben in EUR: **`+{payment['amount_eur']:.2f} €`**{fx_text}\n"
+        f"• Notiz: *{payment['note']}* (gebucht von `{caller_name}`)"
+    )
+
+def handle_addgameaccount(data: dict, caller_id: str, caller_data: dict) -> str:
+    discord_user_id = caller_id
     discord_username = str(caller_data.get("username", "Unknown"))
 
     options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
@@ -15,38 +123,20 @@ def handle_addgameaccount(body: dict, data: dict) -> str:
         return "❌ Bitte gib Spiel und Ingame-Namen an: `/addgameaccount <game> <username>`"
 
     try:
-        # 1. Sicherstellen, dass User in dim_users existiert
-        supabase_client_request(
-            "dim_users",
-            method="POST",
-            data={"discord_user_id": discord_user_id, "discord_username": discord_username},
-            headers_extra={"Prefer": "resolution=merge-duplicates"}
-        )
+        status, resp = rest_api.handle_addgameaccount({
+            "discord_user_id": discord_user_id,
+            "discord_username": discord_username,
+            "game": game,
+            "username": username
+        })
 
-        # 2. Prüfen, ob der Ingame-Account bereits verknüpft ist
-        endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id"
-        status_check, resp_check = supabase_client_request(endpoint_check, method="GET")
-        existing_accounts = json.loads(resp_check) if status_check == 200 else []
-
-        if existing_accounts:
-            owner_id = str(existing_accounts[0].get("discord_user_id"))
-            if owner_id == discord_user_id:
-                return f"ℹ️ Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
-            return f"⛔ **Zugriff verweigert:** Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit einem anderen Discord-Account verknüpft!"
-
-        # 3. Neu anlegen
-        status_a, resp_a = supabase_client_request(
-            "dim_game_accounts",
-            method="POST",
-            data={
-                "discord_user_id": discord_user_id,
-                "game": game,
-                "ingame_username": username
-            },
-            headers_extra={"Prefer": "return=representation"}
-        )
-        if status_a in [200, 201]:
+        if status == 200:
+            if resp.get("status") == "already_linked_self":
+                return f"ℹ Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
             return f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
-        return f"⚠ Fehler beim Verknüpfen ({status_a}): {resp_a}"
+        elif status == 403:
+            return f"⛔ **Zugriff verweigert:** Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit einem anderen Discord-Account verknüpft!"
+        else:
+            return f"⚠ {resp.get('error')}"
     except Exception as e:
         return f"❌ Datenbankfehler: {e}"

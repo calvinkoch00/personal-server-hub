@@ -1,126 +1,209 @@
+import os
 import re
-from services import hetzner
-from services.agent import call_agent_remote
-from services.supabase import supabase_client_request, upsert_game_account
+import json
+from services import hetzner, agent, supabase, fx
 
+def handle_start(payload: dict) -> tuple[int, dict]:
+    game = payload.get("game", "minecraft").strip().lower()
+    duration_raw = str(payload.get("duration", "5m")).strip().lower()
+    server_type = payload.get("server_type", "cpx32")
+    log_mode = str(payload.get("log", payload.get("logging", "none"))).strip().lower()
 
-def handle_rest_request(raw_path: str, body: dict) -> tuple[int, dict]:
-    path = (raw_path or "").rstrip("/").lower()
-    action = body.get("action", "")
+    if log_mode in ["true", "1"]:
+        log_mode = "game"
+    elif log_mode in ["false", "0"]:
+        log_mode = "none"
 
-    # ==========================
-    # 1. Server Start
-    # ==========================
-    if path.endswith("/start") or action == "start":
-        game = body.get("game", "minecraft").strip().lower()
-        duration_raw = str(body.get("duration", "5m")).strip().lower()
-        server_type = body.get("server_type", "cpx32")
-        log_mode = str(body.get("log", body.get("logging", "none"))).strip().lower()
+    unit_map = {"m": 60, "h": 3600, "d": 86400}
+    readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
 
-        if log_mode in ["true", "1"]:
-            log_mode = "game"
-        elif log_mode in ["false", "0"]:
-            log_mode = "none"
+    match = re.match(r"^(\d+)\s*([mhd])$", duration_raw)
+    if match:
+        val, unit = int(match.group(1)), match.group(2)
+        seconds = val * unit_map[unit]
+        readable = f"{val} {readable_map[unit]}"
+    else:
+        seconds = 300
+        readable = "5 Minute(n)"
 
-        unit_map = {"m": 60, "h": 3600, "d": 86400}
-        readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
-        match = re.match(r"^(\d+)\s*([mhd])$", duration_raw)
-        if match:
-            val, unit = int(match.group(1)), match.group(2)
-            seconds = val * unit_map[unit]
-            readable = f"{val} {readable_map[unit]}"
-        else:
-            seconds = 300
-            readable = "5 Minute(n)"
+    result = hetzner.create_server(
+        game=game,
+        seconds=seconds,
+        readable=readable,
+        server_type=server_type,
+        enable_logging=log_mode
+    )
+    return 200, {
+        "message": "Server gestartet",
+        "discord_summary": f"🎮 {result['game'].upper()} gestartet! IP: `{result['ip']}` ({result['lifetime_readable']})",
+        "data": result,
+        "log_mode": log_mode
+    }
 
+def handle_servers() -> tuple[int, dict]:
+    return 200, {"data": hetzner.list_servers()}
+
+def handle_stop(payload: dict) -> tuple[int, dict]:
+    servers = hetzner.list_servers()
+    if not servers:
+        return 400, {"error": "Kein laufender Server vorhanden"}
+
+    server_id = payload.get("server_id")
+    target = next((s for s in servers if str(s["server_id"]) == str(server_id)), servers[0])
+    target_ip = target.get("ip")
+    target_id = str(target.get("server_id"))
+
+    graceful_success = False
+    if target_ip:
         try:
-            res = hetzner.create_server(
-                game=game,
-                seconds=seconds,
-                readable=readable,
-                server_type=server_type,
-                enable_logging=log_mode
-            )
-            return 200, {
-                "message": "Server gestartet",
-                "data": res,
-                "readable_duration": readable,
-                "log_mode": log_mode
-            }
-        except Exception as e:
-            return 500, {"error": f"Fehler beim Starten: {e}"}
+            agent.stop_remote_server(target_ip)
+            graceful_success = True
+        except Exception:
+            pass
 
-    # ==========================
-    # 2. Server Liste / Status
-    # ==========================
-    if path.endswith("/servers") or path.endswith("/status") or action == "list":
-        try:
-            servers = hetzner.list_servers()
-            return 200, {"servers": servers}
-        except Exception as e:
-            return 500, {"error": str(e)}
-
-    # ==========================
-    # 3. Server Stop
-    # ==========================
-    if path.endswith("/stop") or action == "stop":
-        servers = hetzner.list_servers()
-        if not servers:
-            return 404, {"error": "Kein aktiver Server vorhanden"}
-
-        server_id = body.get("server_id")
-        target = next((s for s in servers if str(s["server_id"]) == str(server_id)), servers[0])
-        target_ip = target.get("ip")
-        target_id = str(target.get("server_id"))
-
-        graceful = False
-        if target_ip:
-            try:
-                if hasattr(hetzner, "trigger_server_graceful_stop"):
-                    hetzner.trigger_server_graceful_stop(target_ip, target_id)
-                    graceful = True
-                else:
-                    call_agent_remote(target_ip, "stop")
-                    graceful = True
-            except Exception:
-                graceful = False
-
+    if graceful_success:
         delete_res = hetzner.delete_server(target_id)
         return 200, {
             "message": f"Server {target['name']} gelöscht",
-            "name": target["name"],
-            "server_id": target_id,
-            "graceful": graceful,
-            "action": delete_res.get("action")
+            "hetzner_action": delete_res.get("action"),
+            "target": target,
+            "mode": "graceful"
+        }
+    else:
+        delete_res = hetzner.delete_server(target_id)
+        return 200, {
+            "message": f"Server {target['name']} gelöscht",
+            "hetzner_action": delete_res.get("action"),
+            "target": target,
+            "mode": "direct"
         }
 
-    # ==========================
-    # 4. Logs Umschalten
-    # ==========================
-    if path.endswith("/log") or action == "log":
-        servers = hetzner.list_servers()
-        if not servers:
-            return 404, {"error": "Kein aktiver Server online"}
+def handle_log(payload: dict) -> tuple[int, dict]:
+    servers = hetzner.list_servers()
+    if not servers:
+        return 400, {"error": "Kein aktiver Server online."}
 
-        mode = body.get("mode", "game")
-        res = call_agent_remote(servers[0]["ip"], "toggle-log", data={"mode": mode})
-        if not res:
-            return 502, {"error": "Agent auf VM nicht erreichbar"}
+    mode = str(payload.get("mode", "game")).strip().lower()
+    try:
+        res = agent.toggle_remote_logging(servers[0]["ip"], mode=mode)
         return 200, res
+    except Exception as e:
+        return 500, {"error": f"Agent auf VM nicht erreichbar: {e}"}
 
-    # ==========================
-    # 5. Ingame-Account Verknüpfung
-    # ==========================
-    if path.endswith("/addgameaccount") or action == "addgameaccount":
-        discord_user_id = body.get("discord_user_id")
-        discord_username = body.get("discord_username", "Unknown")
-        game = body.get("game")
-        username = body.get("username")
+def handle_costs(payload: dict) -> tuple[int, dict]:
+    status, resp_text = supabase.supabase_client_request("rpc/get_costs_summary", method="POST", data=payload)
+    if status not in [200, 201]:
+        return status, {"error": f"Fehler beim Abrufen der Abrechnung ({status}): {resp_text}"}
+    return 200, {"rows": json.loads(resp_text)}
 
-        if not discord_user_id or not game or not username:
-            return 400, {"error": "Felder 'discord_user_id', 'game' und 'username' sind erforderlich"}
+def handle_account(payload: dict) -> tuple[int, dict]:
+    user_param = payload.get("user", "me")
+    if str(user_param).lower() == "all":
+        status, resp_text = supabase.supabase_client_request("view_user_balances?select=*&order=current_balance_eur.asc", method="GET")
+        if status == 200:
+            return 200, {"mode": "all", "rows": json.loads(resp_text)}
+        return status, {"error": f"Fehler beim Abrufen der Kontostände ({status}): {resp_text}"}
 
-        res = upsert_game_account(discord_user_id, discord_username, game, username)
-        return 200, res
+    target_uid = payload.get("target_uid")
+    status, resp_text = supabase.supabase_client_request(f"view_user_balances?discord_user_id=eq.{target_uid}", method="GET")
+    if status == 200:
+        rows = json.loads(resp_text)
+        return 200, {"mode": "single", "user": rows[0] if rows else None}
+    return status, {"error": f"Fehler beim Abrufen des Kontos ({status}): {resp_text}"}
+
+def handle_cash(payload: dict) -> tuple[int, dict]:
+    target_uid = payload.get("target_uid")
+    amount_orig = float(payload.get("amount", 0.0))
+    currency = payload.get("currency", "CHF").upper()
+    note = payload.get("note", "Einzahlung")
+    caller_name = payload.get("created_by", "Admin")
+
+    if currency == "CHF":
+        fx_rate, fx_source = fx.get_current_chf_to_eur_rate()
+        fx_text = f" *(Wechselkurs 1 CHF = {fx_rate:.4f} EUR [{fx_source}])* "
+    else:
+        fx_rate = 1.0000
+        fx_source = "direct"
+        fx_text = ""
+
+    amount_eur = round(amount_orig * fx_rate, 2)
+    payment_data = {
+        "discord_user_id": target_uid,
+        "amount_original": amount_orig,
+        "currency": currency,
+        "exchange_rate": fx_rate,
+        "amount_eur": amount_eur,
+        "note": note,
+        "created_by": caller_name
+    }
+
+    status_p, resp_p = supabase.supabase_client_request("fact_user_payments", method="POST", data=payment_data)
+    if status_p in [200, 201]:
+        return 200, {
+            "payment": payment_data,
+            "fx_text": fx_text
+        }
+    return status_p, {"error": f"Fehler beim Speichern der Zahlung ({status_p}): {resp_p}"}
+
+def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
+    discord_user_id = str(payload.get("discord_user_id"))
+    discord_username = str(payload.get("discord_username", "Unknown"))
+    game = str(payload.get("game", "")).strip().lower()
+    username = str(payload.get("username", "")).strip()
+
+    if not game or not username:
+        return 400, {"error": "Felder 'game' und 'username' sind erforderlich"}
+
+    supabase.supabase_client_request(
+        "dim_users",
+        method="POST",
+        data={"discord_user_id": discord_user_id, "discord_username": discord_username},
+        headers_extra={"Prefer": "resolution=merge-duplicates"}
+    )
+
+    endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id"
+    status_check, resp_check = supabase.supabase_client_request(endpoint_check, method="GET")
+    existing_accounts = json.loads(resp_check) if status_check == 200 else []
+
+    if existing_accounts:
+        owner_id = str(existing_accounts[0].get("discord_user_id"))
+        if owner_id == discord_user_id:
+            return 200, {"status": "already_linked_self", "game": game, "username": username}
+        return 403, {"status": "forbidden", "game": game, "username": username}
+
+    status_a, resp_a = supabase.supabase_client_request(
+        "dim_game_accounts",
+        method="POST",
+        data={
+            "discord_user_id": discord_user_id,
+            "game": game,
+            "ingame_username": username
+        },
+        headers_extra={"Prefer": "return=representation"}
+    )
+    if status_a in [200, 201]:
+        return 200, {"status": "created", "game": game, "username": username}
+    return status_a, {"error": f"Fehler beim Verknüpfen ({status_a}): {resp_a}"}
+
+def route_request(path: str, body: dict) -> tuple[int, dict]:
+    raw_path = path or "/"
+    action = body.get("action")
+
+    if raw_path.endswith("/start") or action == "start":
+        return handle_start(body)
+    if raw_path.endswith("/servers") or action == "list":
+        return handle_servers()
+    if raw_path.endswith("/stop") or action == "stop":
+        return handle_stop(body)
+    if raw_path.endswith("/log") or action == "log":
+        return handle_log(body)
+    if raw_path.endswith("/costs"):
+        return handle_costs(body)
+    if raw_path.endswith("/account"):
+        return handle_account(body)
+    if raw_path.endswith("/cash"):
+        return handle_cash(body)
+    if raw_path.endswith("/addgameaccount") or action == "addgameaccount":
+        return handle_addgameaccount(body)
 
     return 404, {"error": f"Endpoint '{raw_path}' nicht gefunden"}
