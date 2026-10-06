@@ -1,100 +1,117 @@
 # On-Demand Gaming & Workload Server Hub
 
-Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und automatischen Terminierung von Gameservern in der Hetzner Cloud – gesteuert via Discord Slash-Commands oder REST-API über AWS CloudFront, AWS Lambda, GoDaddy DNS und einen lokalen Server-Agenten auf persistentem Speicher.
+Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und automatischen Terminierung von Gameservern in der Hetzner Cloud. Gesteuert via Discord Slash-Commands oder REST-API über AWS CloudFront, AWS Lambda, GoDaddy DNS, Supabase-Persistenz und modulare Systemd-Dienste auf persistentem Block-Storage.
 
 ---
 
 ## Architektur-Übersicht
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                        Interfaces                        │
-│   Discord Slash Commands             REST Clients / SPA  │
-└─────────────┬─────────────────────────────────┬──────────┘
-              │ (Ed25519 Signature)             │ (x-auth-token)
-              ▼                                 ▼
-┌──────────────────────────────────────────────────────────┐
-│        api.calvinkoch.ch (AWS CloudFront CDN / SSL)      │
-└─────────────────────────────┬────────────────────────────┘
-                              │ HTTPS Origin Request
-                              ▼
-┌──────────────────────────────────────────────────────────┐
-│                 AWS Lambda Control Plane                 │
-│  • Discord Interaktions-Handler (Ping / Command ACK)     │
-│  • GoDaddy DNS Manager (mc.calvinkoch.ch A-Record)       │
-│  • Hetzner API Client (VM Lifecycle & Provisioning)      │
-│  • Remote Stop-Trigger an Server-Agenten (:8080)         │
-└───────────────────────┬──────────────┬───────────────────┘
-   GoDaddy API (HTTPS)  │              │ Hetzner Cloud API (HTTPS)
-   mc.calvinkoch.ch -> IP              ▼
-┌──────────────────────────────────────────────────────────┐
-│               Hetzner Cloud Infrastructure               │
-│  ┌────────────────────────┐    ┌──────────────────────┐  │
-│  │ Ephemere Compute VM    │    │ Persistentes Storage │  │
-│  │ (z. B. CPX32)          │◄───┤ Volume: /dev/disk/.. │  │
-│  │                        │    │ (/mnt/gamespeicher)  │  │
-│  │ • cloud-init Mount     │    ├──────────────────────┤  │
-│  │ • Docker Compose Up    │    │ • agent.py (:8080)   │  │
-│  │ • Agent HTTP Listener  │    │ • secrets.env        │  │
-│  │                        │    │ • docker-compose.yml │  │
-│  │                        │    │ • Spielstände/Welten │  │
-│  └───────────┬────────────┘    └──────────────────────┘  │
-│              │                                           │
-│              │ Webhook POST / Self-Delete API            │
-│              ▼                                           │
-│  ┌────────────────────────┐    ┌──────────────────────┐  │
-│  │ Discord Channel Status │    │ Hetzner API Delete   │  │
-│  │ (Boot / Save / Delete) │    │ (Restlose Löschung)  │  │
-│  └────────────────────────┘    └──────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                               Interfaces                               │
+│        Discord Slash Commands                   REST Clients / SPA     │
+└───────────────────┬──────────────────────────────────────┬─────────────┘
+                    │ (Ed25519 Signature)                  │ (x-auth-token)
+                    ▼                                      ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│              api.calvinkoch.ch (AWS CloudFront CDN / SSL)              │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ HTTPS Origin Request
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        AWS Lambda Control Plane                        │
+│  • Discord Interaktions-Handler (Type 5 Deferred ACK / Follow-ups)     │
+│  • GoDaddy DNS Manager (mc.calvinkoch.ch A-Record Dynamic IP)          │
+│  • Hetzner Cloud API Client (VM Lifecycle & Provisioning)              │
+│  • Supabase Client (Account Linking & User Management)                 │
+│  • Remote Stop & Log-Toggle Trigger an VM-Agent (:8080)                │
+└─────────────────┬─────────────────┬───────────────────┬────────────────┘
+  GoDaddy (HTTPS) │                 │ Hetzner (HTTPS)   │ Supabase REST (HTTPS)
+  mc -> Host-IP   │                 ▼                   ▼
+                  │  ┌───────────────────────────────────────────────────┐
+                  │  │           Hetzner Cloud Infrastructure            │
+                  │  │  ┌──────────────────────┐  ┌───────────────────┐  │
+                  │  │  │ Ephemere Compute VM  │  │ Persistenter      │  │
+                  │  │  │ (z. B. CPX32)        │◄─┤ Speicher          │  │
+                  │  │  │                      │  │ (/mnt/gamespeicher│  │
+                  │  │  │ • Multi-Stage Boot   │  ├───────────────────┤  │
+                  │  │  │ • Docker Engine      │  │ • session_cache   │  │
+                  │  │  │ • Systemd Daemons:   │  │ • secrets.env     │  │
+                  │  │  │   - lifecycle_guard  │  │ • docker-compose  │  │
+                  │  │  │   - session_tracker  │  │ • Spielstände/Welt│  │
+                  │  │  │   - log_streamer     │  │ • Python Scripts  │  │
+                  │  │  │   - control_api      │  │                   │  │
+                  │  │  └──────────┬───────────┘  └───────────────────┘  │
+                  │  └─────────────┼─────────────────────────────────────┘
+                  │                │ Webhooks / Live Streams
+                  ▼                ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   Discord Channel Notifications                        │
+│  • Bereitschafts- & Statusmeldungen (Server online, IP-Zuweisung)      │
+│  • Live Console Logs (Filterbar: game, all, none)                      │
+│  • Shutdown- & Lifecycle-Warnungen                                     │
+└────────────────────────────────────────────────────────────────────────┘
 
 ```
 
 * **Custom Domain & CDN:** `api.calvinkoch.ch` via AWS CloudFront mit automatischer SSL-Terminierung (`us-east-1` ACM) und Weiterleitung an die Lambda-Funktion in Frankfurt (`eu-central-1`).
-* **Dynamic DNS Integration:** Bei jedem VM-Start aktualisiert Lambda automatisch den DNS-A-Record `mc.calvinkoch.ch` über die GoDaddy-API auf die neu zugewiesene IPv4-Adresse.
-* **Persistentes Volume-First Storage:** Hetzner Cloud Volume (`107045799`, EXT4), gemountet unter `/mnt/gamespeicher`. Enthält nicht nur Spielstände und Konfigurationen, sondern auch den persistenten Microservice `agent.py` und die lokalen Umgebungsvariablen (`secrets.env`).
-* **Ephemere Compute VMs:** Hetzner Cloud Instanzen (Standard: `CPX32`, 4 vCPUs, 8 GB RAM), die rein für die Laufzeit existieren. Die VM enthält keine persistenten Daten und wird nach Spielende rückstandslos gelöscht.
-* **Graceful Shutdown & Data Integrity:**
-* Der Stop-Befehl triggert HTTP `POST :8080/stop` auf der VM.
-* Der Agent führt synchron `docker compose stop -t 60` und `sync` aus, wodurch PaperMC alle Chunks und Spielerdaten ohne Datenverlust speichert.
-* Erst nach erfolgreichem Unmount und Datenabgleich löscht sich die VM eigenständig per `DELETE /servers/{id}` über die Hetzner API.
-* **Live Statusmeldungen via Discord Webhook:** Der Server meldet Status-Updates (Bereit zum Verbinden, Sicherungsvorgang, Löschung) direkt aus dem laufenden Betrieb in den Discord-Kanal.
+* **Dynamic DNS Integration:** Bei jedem VM-Start aktualisiert Lambda den DNS-A-Record `mc.calvinkoch.ch` über die GoDaddy-API auf die neu zugewiesene Host-IPv4.
+* **Modulare Systemd-Agenten:** Statt eines monolithischen Skripts teilen vier spezialisierte Daemons die Aufgaben auf dem Server:
+* `gameserver-guard.service` (`lifecycle_guard.py`): Überwacht die Lebensdauer, warnt vor dem Ablauf und initiiert den Graceful Shutdown.
+* `gameserver-tracker.service` (`session_tracker.py`): Parst Docker-Logstreams live, cacht Spieler-Sessions im Volume und synchronisiert alle 10 Minuten gebündelt mit Supabase.
+* `gameserver-streamer.service` (`log_streamer.py`): Pufferung und Übertragung von Konsolen- und Systemlogs per Discord Webhook (drei Modi: `none`, `game`, `all`).
+* `gameserver-api.service` (`control_api.py`): Lokaler HTTP-Endpunkt auf Port 8080 für Remote-Steuerung (`/stop`, `/toggle-log`, `/emit-log`).
+* **Offline-First Session Caching & Crash Recovery:**
+* Jede Session erhält lokal eine eindeutige UUIDv4.
+* Aktive Sessions werden minütlich mit einem Heartbeat (`fallback_end_at`) im Volume (`session_cache.json`) atomar gesichert.
+* Alle 10 Minuten sowie beim Shutdown gleicht der Tracker die Daten per Upsert (`Prefer: resolution=merge-duplicates`) mit Supabase ab und löscht beendete Sessions aus dem lokalen Cache.
+* Bei unvorhergesehenen Reboots oder Crashes liest der Tracker beim Start alte Cache-Reste aus, schließt diese als `crash_recovery` und lädt sie vollständig nach.
+* **Graceful Shutdown Pipeline:**
+
+1. `gameserver-tracker.service` schließt offene Sessions und synchronisiert den Cache restlos mit Supabase.
+2. `docker compose stop -t 60` lässt PaperMC alle Chunks und Spielerdaten auf die Festplatte flushen.
+3. Das Volume `/mnt/gamespeicher` wird sauber unmountet.
+4. Die Hetzner-API erhält den `DELETE`-Aufruf zur vollständigen Zerstörung der ephemeren VM.
 
 ---
 
 ## Discord Slash Commands
 
-Der Bot antwortet innerhalb von Millisekunden direkt auf Slash-Befehle im Chat:
+Die Interaktionen nutzen `type: 5` (Deferred Channel Message) mit nachgelagerten Webhook-Updates, wodurch Timeouts bei Initialisierungen ausgeschlossen sind.
 
-| Befehl      | Parameter               | Beschreibung                                                                                                    |
-| ----------- | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `/start`  | `args` *(optional)* | Startet die Instanz, setzt den DNS-Record und startet Minecraft. Standard:`minecraft` mit 5 Minuten Laufzeit. |
-| `/status` | *keine*               | Zeigt aktive Server samt IP-Adresse, Hostname, Typ und Status an.                                               |
-| `/stop`   | *keine*               | Weist den Server-Agenten an, Minecraft sauber zu beenden, Chunks zu sichern und die VM restlos zu löschen.     |
-| `/help`   | *keine*               | Liefert eine formatierte Übersicht aller registrierten Befehle und REST-Endpunkte.                             |
+| Befehl              | Option       | Typ    | Erforderlich | Beschreibung                                                                       |
+| ------------------- | ------------ | ------ | ------------ | ---------------------------------------------------------------------------------- |
+| `/start`          | `game`     | String | Nein         | Ziel-Spiel/Servertyp (Standard:`minecraft`).                                     |
+|                     | `duration` | String | Nein         | Laufzeit frei eingeben (z. B.`45m`, `8h`, `2d` — Standard: `5m`).         |
+|                     | `log`      | String | Nein         | Log-Stream-Modus (`none`, `game`, `all` — Standard: `none`).              |
+| `/status`         | *keine*    | -      | -            | Zeigt alle aktiven Server samt IP-Adresse, Laufzeit und Hostname.                  |
+| `/stop`           | *keine*    | -      | -            | Leitet den Graceful Shutdown ein (Sichern der Chunks, Session-Sync, VM-Löschung). |
+| `/log`            | `mode`     | String | Ja           | Schaltet das Live-Logging im laufenden Betrieb um (`none`, `game`, `all`).   |
+| `/addgameaccount` | `game`     | String | Ja           | Name des Spiels (z. B.`minecraft`).                                              |
+|                     | `username` | String | Ja           | Ingame-Spielername zur Verknüpfung mit dem Discord-Account.                       |
+| `/help`           | *keine*    | -      | -            | Gibt eine Übersicht aller Befehle und Bedienungshinweise aus.                     |
 
-### Syntax-Beispiele für `/start`:
+### Beispiele für `/start`:
 
-* `/start` $\rightarrow$ Startet Minecraft für standardmäßig **5 Minuten** (ideal zum Testen).
-* `/start args: 2h` $\rightarrow$ Startet Minecraft für **2 Stunden**.
-* `/start args: 30m` $\rightarrow$ Startet Minecraft für **30 Minuten**.
-* `/start args: csgo 1d` $\rightarrow$ Startet den CS:GO-Container für **1 Tag**.
-* `/start args: 14d` $\rightarrow$ Greift das Hard-Cap: wird automatisch auf das Maximum von **7 Tagen** gedeckelt.
+* `/start` $\rightarrow$ Startet Minecraft für 5 Minuten ohne Log-Streaming.
+* `/start duration: 45m log: game` $\rightarrow$ 45 Minuten Laufzeit, überträgt Spiel-Events (Joins, Leaves, Chat, Tode) live in Discord.
+* `/start duration: 12h log: all` $\rightarrow$ 12 Stunden Laufzeit mit vollständigen Server- und System-Logs.
+* `/start game: csgo duration: 2d` $\rightarrow$ Startet den CS:GO-Container für 2 Tage.
 
 ---
 
 ## REST Control Plane API
 
-Die Control Plane ist weltweit unter **`[https://api.calvinkoch.ch](https://api.calvinkoch.ch)`** erreichbar.
+Die API ist weltweit über `[https://api.calvinkoch.ch](https://api.calvinkoch.ch)` erreichbar.
 
 ### Authentifizierung
 
-Jeder reguläre API-Aufruf (außer Discord-Webhooks, die über Ed25519 signiert werden) erfordert den Auth-Header:
+Jeder reguläre API-Aufruf (außer Discord-Webhooks, die über Ed25519-Signaturen im Header validiert werden) verlangt den Auth-Header:
 
-| Header-Feld                              | Typ        | Beschreibung                       |
-| ---------------------------------------- | ---------- | ---------------------------------- |
-| `x-auth-token` (oder `X-Auth-Token`) | `string` | Dein konfiguriertes`AUTH_SECRET` |
-| `Content-Type`                         | `string` | `application/json`               |
+| Header-Feld                              | Typ        | Beschreibung                   |
+| ---------------------------------------- | ---------- | ------------------------------ |
+| `x-auth-token` (oder `X-Auth-Token`) | `string` | Konfiguriertes`AUTH_SECRET`. |
+| `Content-Type`                         | `string` | `application/json`           |
 
 ---
 
@@ -102,9 +119,9 @@ Jeder reguläre API-Aufruf (außer Discord-Webhooks, die über Ed25519 signiert 
 
 #### 1. Server starten
 
-Erstellt eine Hetzner-VM, mountet das Volume, aktualisiert den GoDaddy DNS-Record, startet Docker Compose und übergibt die geplante Lebenszeit an den Server-Agenten.
+Erstellt eine Hetzner-VM, mountet das Block-Volume, konfiguriert DNS, startet die Docker-Container und initialisiert die Systemd-Überwachungsdienste.
 
-* **Methoden & Pfade:** `POST /start` oder `POST /` mit Body `{"action": "start"}`
+* **Methode & Pfad:** `POST /start` oder `POST /` mit Body `{"action": "start"}`
 * **URL:** `[https://api.calvinkoch.ch/start](https://api.calvinkoch.ch/start)`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
@@ -113,8 +130,9 @@ Erstellt eine Hetzner-VM, mountet das Volume, aktualisiert den GoDaddy DNS-Recor
 ```json
 {
   "game": "minecraft",
-  "duration": "2h",
-  "server_type": "cpx32"
+  "duration": "4h",
+  "server_type": "cpx32",
+  "log": "game"
 }
 
 ```
@@ -124,7 +142,7 @@ Erstellt eine Hetzner-VM, mountet das Volume, aktualisiert den GoDaddy DNS-Recor
 ```json
 {
   "message": "Server gestartet",
-  "discord_summary": "🎮 MINECRAFT gestartet! IP: `2.28.203.66` (2 Stunde(n))",
+  "discord_summary": "🎮 MINECRAFT gestartet! IP: `2.28.203.66` (4 Stunde(n))",
   "data": {
     "server_id": 168873929,
     "name": "minecraft-ondemand",
@@ -133,8 +151,9 @@ Erstellt eine Hetzner-VM, mountet das Volume, aktualisiert den GoDaddy DNS-Recor
     "domain": "mc.calvinkoch.ch",
     "game": "minecraft",
     "server_type": "cpx32",
-    "lifetime_seconds": 7200,
-    "lifetime_readable": "2 Stunde(n)"
+    "lifetime_seconds": 14400,
+    "lifetime_readable": "4 Stunde(n)",
+    "logging": "game"
   }
 }
 
@@ -142,37 +161,9 @@ Erstellt eine Hetzner-VM, mountet das Volume, aktualisiert den GoDaddy DNS-Recor
 
 ---
 
-#### 2. Server-Status abfragen
+#### 2. Server-Status & Instanzen abfragen
 
-Ermittelt den aktuellen Betriebszustand und die IP-Adresse einer Instanz.
-
-* **Methoden & Pfade:**
-* `GET /status?server_id=<SERVER_ID>`
-* `POST /status` mit Body `{"server_id": "<SERVER_ID>"}`
-* `POST /` mit Body `{"action": "status", "server_id": "<SERVER_ID>"}`
-* **URL:** `[https://api.calvinkoch.ch/status](https://api.calvinkoch.ch/status)`
-* **Headers:** `x-auth-token: <AUTH_SECRET>`
-
-**Response (`200 OK`):**
-
-```json
-{
-  "data": {
-    "server_id": 168873929,
-    "status": "running",
-    "ip": "2.28.203.66"
-  }
-}
-
-```
-
----
-
-#### 3. Alle aktiven Server auflisten
-
-Liefert alle derzeit laufenden Instanzen des Hetzner-Projekts zurück.
-
-* **Methoden & Pfade:** `GET /servers`, `POST /servers`, oder `POST /` mit Body `{"action": "list"}`
+* **Pfade:** `GET /servers`, `POST /servers` oder `POST /` mit Body `{"action": "list"}`
 * **URL:** `[https://api.calvinkoch.ch/servers](https://api.calvinkoch.ch/servers)`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
@@ -187,7 +178,7 @@ Liefert alle derzeit laufenden Instanzen des Hetzner-Projekts zurück.
       "status": "running",
       "ip": "2.28.203.66",
       "server_type": "cpx32",
-      "created": "2026-10-05T18:00:00Z"
+      "created": "2026-10-06T15:00:00Z"
     }
   ]
 }
@@ -196,86 +187,132 @@ Liefert alle derzeit laufenden Instanzen des Hetzner-Projekts zurück.
 
 ---
 
-#### 4. Server stoppen (Graceful Stop & Deletion)
+#### 3. Live-Logs umschalten
 
-Weist den Server-Agenten an, Minecraft kontrolliert zu beenden (`SIGTERM`, Chunk-Flush), unmountet das Volume und löscht die VM aus Hetzner.
+Schaltet den Logging-Modus auf einer aktiven VM im laufenden Betrieb um.
 
-* **Methoden & Pfade:** `POST /stop` oder `POST /` mit Body `{"action": "stop", "server_id": "<SERVER_ID>"}`
-* **URL:** `[https://api.calvinkoch.ch/stop](https://api.calvinkoch.ch/stop)`
+* **Pfade:** `POST /log` oder `POST /` mit Body `{"action": "log", "mode": "all"}`
+* **URL:** `[https://api.calvinkoch.ch/log](https://api.calvinkoch.ch/log)`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
-**Request Body (optional):**
+**Request Body:**
 
 ```json
 {
-  "server_id": "168873929"
+  "mode": "all"
 }
 
 ```
+
+---
+
+#### 4. Server stoppen (Graceful Shutdown)
+
+Triggert den lokalen Agenten auf Port 8080, leert den Session-Cache nach Supabase, stoppt Docker, trennt das Volume und löscht die VM.
+
+* **Pfade:** `POST /stop` oder `POST /` mit Body `{"action": "stop"}`
+* **URL:** `[https://api.calvinkoch.ch/stop](https://api.calvinkoch.ch/stop)`
+* **Headers:** `x-auth-token: <AUTH_SECRET>`
 
 **Response (`200 OK`):**
 
 ```json
 {
-  "data": {
-    "status": "graceful_triggered"
-  }
+  "message": "Server minecraft-ondemand gelöscht",
+  "hetzner_action": "stop_and_delete_invoked"
 }
 
 ```
 
 ---
 
-#### 5. Hilfe & Befehlsübersicht abfragen
+#### 5. Spieler-Account verknüpfen (Supabase Star-Schema)
 
-Liefert die formatierte Übersicht aller verfügbaren Befehle und Endpunkte.
+Verknüpft einen Ingame-Namen mit einer Discord-ID in den Dimensionstabellen `dim_users` und `dim_game_accounts`.
 
-* **Methoden & Pfade:** `GET /help`, `POST /help`, oder `POST /` mit Body `{"action": "help"}`
-* **URL:** `[https://api.calvinkoch.ch/help](https://api.calvinkoch.ch/help)`
+* **Pfade:** `POST /addgameaccount` oder `POST /` mit Body `{"action": "addgameaccount"}`
+* **URL:** `[https://api.calvinkoch.ch/addgameaccount](https://api.calvinkoch.ch/addgameaccount)`
 * **Headers:** `x-auth-token: <AUTH_SECRET>`
 
+**Request Body:**
+
+```json
+{
+  "discord_user_id": "432141301111324672",
+  "discord_username": "gamesbond00",
+  "game": "minecraft",
+  "username": "gamesbond00"
+}
+
+```
+
 ---
 
-#### 6. CORS Preflight
+## Supabase Star-Schema
 
-* **Methode & Pfad:** `OPTIONS /*`
-* **Response (`200 OK`):** Sendet CORS-Header (`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers: *`) für Web-Frontends/SPAs zurück.
+Die PostgreSQL-Datenbank dient als relationale Single Source of Truth für Analysen und Spielerverwaltung:
+
+```
+┌─────────────────────────┐               ┌─────────────────────────┐
+│        dim_users        │               │   dim_game_accounts     │
+├─────────────────────────┤               ├─────────────────────────┤
+│ discord_user_id (PK)    │◄───┐     ┌───►│ id (PK, UUID)           │
+│ discord_username        │    │     │    │ discord_user_id (FK)    │
+│ created_at              │    │     │    │ game                    │
+└─────────────────────────┘    │     │    │ ingame_username         │
+                               │     │    │ created_at              │
+                               │     │    └─────────────────────────┘
+                               │     │
+                 ┌─────────────┴─────┴───────────┐
+                 │      fact_player_sessions     │
+                 ├───────────────────────────────┤
+                 │ id (PK, UUID)                 │
+                 │ discord_user_id (FK, Nullable)│
+                 │ account_id (FK, Nullable)     │
+                 │ game                          │
+                 │ ingame_username               │
+                 │ joined_at (TIMESTAMPTZ)       │
+                 │ fallback_end_at (TIMESTAMPTZ) │
+                 │ left_at (TIMESTAMPTZ, Nullable│
+                 │ close_reason (Text, Nullable) │
+                 │ duration_seconds (Int4)       │
+                 │ created_at (TIMESTAMPTZ)      │
+                 └───────────────────────────────┘
+
+```
 
 ---
 
-## Volume-Konfiguration (`/mnt/gamespeicher`)
+## Volume-Dateistruktur (`/mnt/gamespeicher`)
 
-Auf dem Hetzner-Volume verbleiben alle persistenten Dateien:
+Alle persistenten Skripte, Caches und Spieldaten liegen auf dem Hetzner Cloud Volume:
 
 ```text
 /mnt/gamespeicher/
-├── agent.py               # Lokaler HTTP-Trigger (Port 8080) für Lifecycle & Discord-Status
-├── secrets.env            # Lokale Umgebungsvariablen (AUTH_SECRET, Tokens, Webhook)
-├── docker-compose.yml     # Container-Definition (itzg/minecraft-server)
-└── data/                  # PaperMC Welten, Chunks, Inventare, Server-Properties
+├── lifecycle_guard.py     # Laufzeitwächter & Shutdown-Koordinator
+├── session_tracker.py     # Docker Log-Parser & Supabase Batch-Sync Worker
+├── log_streamer.py        # Discord Log-Streaming (Game/System/None)
+├── control_api.py         # Lokale HTTP API (Port 8080)
+├── session_cache.json     # Atomarer Offline-Cache für offene Sessions
+├── secrets.env            # Lokale Umgebungsvariablen (Tokens, Keys, Webhooks)
+├── docker-compose.yml     # Container-Setup (itzg/minecraft-server)
+└── data/                  # PaperMC Chunks, Welten, Spielerdaten und Konfigurationen
 
 ```
 
-### `/mnt/gamespeicher/secrets.env` Aufbau:
+### `/mnt/gamespeicher/secrets.env` Format:
 
 ```env
-AUTH_SECRET="dein-super-secret-auth-token"
-HETZNER_API_TOKEN="dein-hetzner-cloud-api-token"
+AUTH_SECRET="dein-api-auth-secret"
+HETZNER_API_TOKEN="dein-hetzner-token"
 DISCORD_STATUS_WEBHOOK_URL="https://discord.com/api/webhooks/..."
+DISCORD_LOG_WEBHOOK_URL="https://discord.com/api/webhooks/..."
+SUPABASE_URL="https://deine-id.supabase.co"
+SUPABASE_KEY="dein-supabase-service-role-oder-anon-key"
+GAME_NAME="minecraft"
+VOLUME_DIR="/mnt/gamespeicher"
 
 ```
-
----
-
-## Status-Codes Übersicht
-
-| Status               | Bedeutung                                                                        |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `200 OK`           | Anfrage erfolgreich ausgeführt.                                                 |
-| `400 Bad Request`  | Fehlende Pflichtfelder oder ungültiges Interaktionsformat.                      |
-| `401 Unauthorized` | Fehlender/ungültiger`x-auth-token` bzw. fehlerhafte Discord Ed25519-Signatur. |
-| `404 Not Found`    | Endpunkt oder Route nicht gefunden.                                              |
-| `500 Server Error` | Interner Fehler oder Hetzner-API-Fehlschlag.                                     |
 
 ---
 
@@ -291,7 +328,7 @@ chmod +x setup_env.sh
 
 ```
 
-Erstelle eine `.env`-Datei für lokale Tests:
+Erstelle eine `.env`-Datei für lokale Tests und CLI-Aufrufe:
 
 ```env
 API_BASE_URL=https://api.calvinkoch.ch
@@ -306,22 +343,24 @@ GODADDY_API_KEY=dein_godaddy_key
 GODADDY_API_SECRET=dein_godaddy_secret
 GODADDY_DOMAIN=calvinkoch.ch
 GODADDY_SUBDOMAIN=mc
+SUPABASE_URL=https://xyz.supabase.co
+SUPABASE_KEY=dein_supabase_key
 
 ```
 
-### 2. GitHub Secrets hinterlegen
+### 2. GitHub Actions Secrets
 
-Unter **Settings** → **Secrets and variables** → **Actions** eintragen:
+Trage unter **Settings** $\rightarrow$ **Secrets and variables** $\rightarrow$ **Actions** folgende Variablen ein:
 
 * `AWS_ACCESS_KEY_ID`
 * `AWS_SECRET_ACCESS_KEY`
-* `LAMBDA_FUNCTION_URL` (Deine Function URL oder `[https://api.calvinkoch.ch](https://api.calvinkoch.ch)`)
+* `LAMBDA_FUNCTION_URL`
 * `DISCORD_APPLICATION_ID`
 * `DISCORD_BOT_TOKEN`
 
-### 3. AWS Lambda Umgebungsvariablen
+### 3. AWS Lambda Konfiguration
 
-In der AWS-Konsole unter der Lambda-Funktion (**Configuration** → **Environment variables**):
+In der AWS-Konsole unter **Configuration** $\rightarrow$ **Environment variables**:
 
 * `HETZNER_API_TOKEN`
 * `VOLUME_ID`
@@ -333,13 +372,19 @@ In der AWS-Konsole unter der Lambda-Funktion (**Configuration** → **Environmen
 * `GODADDY_API_SECRET`
 * `GODADDY_DOMAIN`
 * `GODADDY_SUBDOMAIN`
+* `SUPABASE_URL`
+* `SUPABASE_KEY`
 
-*Hinweis:* Das Lambda-Timeout sollte unter **General configuration** auf mindestens **30 Sekunden** gesetzt sein.
+*Wichtig:* Unter **General configuration** das Timeout der Lambda-Funktion auf **mindestens 30 Sekunden** erhöhen (Standard von 3 Sekunden führt zu Abbrüchen bei Hetzner- und Supabase-Aufrufen).
 
-### 4. Discord Bot Konfiguration
+### 4. Discord Bot Registrierung
 
-1. Applikation im [Discord Developer Portal](https://www.google.com/search?q=https://discord.com/developers/applications) öffnen.
-2. Unter **General Information** die **Interactions Endpoint URL** setzen auf:
+1. Im [Discord Developer Portal](https://www.google.com/search?q=https://discord.com/developers/applications) deine Applikation öffnen.
+2. Unter **General Information** die **Interactions Endpoint URL** eintragen:
    `[https://api.calvinkoch.ch](https://api.calvinkoch.ch)`
-3. Discord validiert die URL sofort per PING-Request (`200 OK`).
-4. Slash-Befehle werden bei jedem Deployment über GitHub Actions automatisch synchronisiert (oder manuell via `python3 scripts/register_discord_commands.py`).
+3. Slash Commands registrieren:
+
+```bash
+python scripts/register_discord_commands.py
+
+```
