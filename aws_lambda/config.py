@@ -1,99 +1,95 @@
 import os
 import re
 
-HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN")
-LOCATION = os.environ.get("LOCATION", "nbg1")
+HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
-DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY")
-DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID")
 DISCORD_STATUS_WEBHOOK_URL = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", "")
-
-# Supabase Secrets
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-
-# GitHub Konfiguration
-GITHUB_REPO_RAW = os.environ["GITHUB_REPO_RAW"]
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+DISCORD_LOG_WEBHOOK_URL = os.environ.get("DISCORD_LOG_WEBHOOK_URL", "")
+LOCATION = os.environ.get("HETZNER_LOCATION", "nbg1")
 
 DEFAULT_GAME = "minecraft"
-DEFAULT_LIFETIME_SECONDS = 300
-MAX_LIFETIME_SECONDS = 7 * 24 * 3600
 
-GAME_CONFIG = {
+GAME_CONFIGS = {
     "minecraft": {
-        "volume_id": int(os.environ.get("VOLUME_ID_MINECRAFT", os.environ.get("VOLUME_ID", "107045799"))),
-        "port": 25565
+        "volume_id": 107045799,
+        "port": 25565,
+        "default_type": "cpx32"
     }
 }
 
 
-def get_game_config(game: str) -> tuple[int, int, str] | None:
-    game_lower = game.lower().strip()
-    cfg = GAME_CONFIG.get(game_lower)
-    if not cfg:
-        return None
-    return cfg["volume_id"], cfg["port"], game_lower
+def get_game_config(game: str = "minecraft") -> dict:
+    return GAME_CONFIGS.get(game.lower(), GAME_CONFIGS[DEFAULT_GAME])
 
 
-def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
-    """Parst Benutzereingaben wie 'minecraft 2h' oder '30m'."""
-    if not raw_input or not raw_input.strip():
-        return DEFAULT_GAME, DEFAULT_LIFETIME_SECONDS, "5 Minute(n)"
+def parse_start_args(raw_input: str | None) -> tuple[str, int, str, bool]:
+    """
+    Parst Spiel, Dauer und Logging-Flag.
+    Beispiele:
+      None -> ("minecraft", 300, "5 Minute(n)", False)
+      "2h logging=true" -> ("minecraft", 7200, "2 Stunde(n)", True)
+      "minecraft 45m log" -> ("minecraft", 2700, "45 Minute(n)", True)
+    """
+    if not raw_input:
+        return DEFAULT_GAME, 300, "5 Minute(n)", False
 
-    parts = raw_input.strip().lower().split()
-    duration_str = None
-    game = DEFAULT_GAME
+    tokens = raw_input.strip().lower().split()
+    enable_logging = False
+    filtered_tokens = []
 
-    for part in parts:
-        if re.match(r"^\d+[mhd]?$", part):
-            duration_str = part
+    for token in tokens:
+        if token in ["logging=true", "log=true", "log", "logging"]:
+            enable_logging = True
+        elif token in ["logging=false", "log=false"]:
+            enable_logging = False
         else:
-            game = part
+            filtered_tokens.append(token)
 
-    if not duration_str:
-        return game, DEFAULT_LIFETIME_SECONDS, "5 Minute(n)"
+    game = DEFAULT_GAME
+    seconds = 300
+    readable = "5 Minute(n)"
 
-    match = re.match(r"^(\d+)([mhd])?$", duration_str)
-    if not match:
-        return game, DEFAULT_LIFETIME_SECONDS, "5 Minute(n)"
+    for token in filtered_tokens:
+        match = re.match(r"^(\d+)([mhd])$", token)
+        if match:
+            value, unit = int(match.group(1)), match.group(2)
+            if unit == "m":
+                seconds = value * 60
+                readable = f"{value} Minute(n)"
+            elif unit == "h":
+                seconds = value * 3600
+                readable = f"{value} Stunde(n)"
+            elif unit == "d":
+                seconds = value * 86400
+                readable = f"{value} Tag(e)"
+        else:
+            game = token
 
-    val = int(match.group(1))
-    unit = match.group(2) or "h"
-
-    if unit == "m":
-        seconds = val * 60
-        readable = f"{val} Minute(n)"
-    elif unit == "d":
-        seconds = val * 86400
-        readable = f"{val} Tag(e)"
-    else:
-        seconds = val * 3600
-        readable = f"{val} Stunde(n)"
-
-    if seconds > MAX_LIFETIME_SECONDS:
-        return game, MAX_LIFETIME_SECONDS, "7 Tage (Maximum)"
-    if seconds < 60:
-        return game, 60, "1 Minute (Minimum)"
-
-    return game, seconds, readable
+    return game, seconds, readable, enable_logging
 
 
-def get_stage1_bootloader(volume_id: int, game_port: int, max_seconds: int = 300) -> str:
-    """Stage-1 Bootloader als Bash-Skript für öffentliches Repo."""
-    gh_repo = os.environ.get("GITHUB_REPO_RAW", GITHUB_REPO_RAW)
-    auth_sec = os.environ.get("AUTH_SECRET", AUTH_SECRET)
-    hetzner_tok = os.environ.get("HETZNER_API_TOKEN", HETZNER_API_TOKEN)
-    discord_wh = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", DISCORD_STATUS_WEBHOOK_URL)
-    sb_url = os.environ.get("SUPABASE_URL", SUPABASE_URL)
-    sb_key = os.environ.get("SUPABASE_KEY", SUPABASE_KEY)
+def get_stage1_bootloader(
+    volume_id: int,
+    game_port: int = 25565,
+    max_seconds: int = 300,
+    enable_logging: bool = False
+) -> str:
+    auth_secret = os.environ.get("AUTH_SECRET", "")
+    hetzner_token = os.environ.get("HETZNER_API_TOKEN", "")
+    discord_status = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", "")
+    discord_log = os.environ.get("DISCORD_LOG_WEBHOOK_URL", "")
+    supabase_url = os.environ.get("SUPABASE_URL", "https://test.supabase.co")
+    supabase_key = os.environ.get("SUPABASE_KEY", "test-sb-key")
+    github_repo = os.environ.get(
+        "GITHUB_REPO_RAW",
+        "https://raw.githubusercontent.com/calvinkoch00/personal-server-hub/main"
+    )
 
     return f"""#!/bin/bash
 set -euo pipefail
 
 echo "[STAGE-1] Starte Initialisierung..."
 
-# 1. Volume frühzeitig einhängen
 MOUNT_DIR="/mnt/gamespeicher"
 VOLUME_DEV="/dev/disk/by-id/scsi-0HC_Volume_{volume_id}"
 
@@ -113,13 +109,14 @@ if ! mountpoint -q "$MOUNT_DIR"; then
   echo "[STAGE-1] Volume gemountet."
 fi
 
-# 2. Secrets für Stage-2 Agenten injizieren
+# 2. Secrets injizieren
 cat << 'EOF_SECRETS' > "$MOUNT_DIR/secrets.env"
-AUTH_SECRET="{auth_sec}"
-HETZNER_API_TOKEN="{hetzner_tok}"
-DISCORD_STATUS_WEBHOOK_URL="{discord_wh}"
-SUPABASE_URL="{sb_url}"
-SUPABASE_KEY="{sb_key}"
+AUTH_SECRET="{auth_secret}"
+HETZNER_API_TOKEN="{hetzner_token}"
+DISCORD_STATUS_WEBHOOK_URL="{discord_status}"
+DISCORD_LOG_WEBHOOK_URL="{discord_log}"
+SUPABASE_URL="{supabase_url}"
+SUPABASE_KEY="{supabase_key}"
 EOF_SECRETS
 chmod 600 "$MOUNT_DIR/secrets.env"
 
@@ -127,9 +124,10 @@ chmod 600 "$MOUNT_DIR/secrets.env"
 export VOLUME_ID="{volume_id}"
 export GAME_PORT="{game_port}"
 export MAX_SECONDS="{max_seconds}"
-export GITHUB_REPO="{gh_repo}"
+export ENABLE_LOGGING="{str(enable_logging).lower()}"
+export GITHUB_REPO="{github_repo}"
 
-# 4. bootstrap.sh direkt via Raw URL laden (Repo ist öffentlich)
+# 4. bootstrap.sh laden
 mkdir -p /opt/bootstrap
 echo "[STAGE-1] Lade bootstrap.sh..."
 curl -sSL -H "Cache-Control: no-cache" \\

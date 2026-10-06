@@ -1,5 +1,6 @@
 import os
 import json
+import urllib.request
 from auth import is_authorized, verify_discord_signature
 from config import parse_start_args
 import hetzner
@@ -16,18 +17,11 @@ def build_response(status_code: int, body: dict) -> dict:
     }
 
 def get_registered_discord_commands() -> str:
-    cache_path = os.path.join(os.path.dirname(__file__), "commands_cache.txt")
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return f.read()
-        except Exception:
-            pass
-
     return (
         "📖 **Verfügbare Server-Befehle:**\n\n"
-        "• `/start [args]` — Startet den Server (Standard: Minecraft, 5m)\n"
+        "• `/start [args]` — Startet den Server (z. B. `2h log=true`)\n"
         "• `/status` — Zeigt alle aktiven Server samt IP an\n"
+        "• `/log` — Schaltet Live-Logs im Discord-Kanal ein/aus\n"
         "• `/stop` — Stoppt und löscht den laufenden Server\n"
         "• `/help` — Zeigt diese Übersicht an"
     )
@@ -35,11 +29,9 @@ def get_registered_discord_commands() -> str:
 def handle_discord_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
 
-    # Type 1: Discord PING -> PONG
     if interaction_type == 1:
         return build_response(200, {"type": 1})
 
-    # Type 2: Slash Command
     if interaction_type == 2:
         data = body.get("data", {})
         command_name = data.get("name")
@@ -61,42 +53,56 @@ def handle_discord_interaction(body: dict) -> dict:
                 msg = "⚪ Kein laufender Server zum Stoppen vorhanden."
             else:
                 target = servers[0]
-                target_ip = target.get("ip")
-                target_id = str(target["server_id"])
-
-                hetzner.trigger_server_graceful_stop(target_ip, target_id)
-                msg = (
-                    f"🛑 **Server `{target['name']}` fährt herunter!**\n"
-                    f"💾 Minecraft sichert die Welt & Chunks sauber ab.\n"
-                    f"🗑️ Sobald das Volume frei ist, löscht sich die Instanz automatisch."
-                )
+                hetzner.delete_server(str(target["server_id"]))
+                msg = f"🛑 **Server `{target['name']}` wird heruntergefahren und gelöscht.**"
 
         elif command_name == "start":
             options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
             raw_input = options.get("args")
-            game, seconds, readable = parse_start_args(raw_input)
+            game, seconds, readable, enable_logging = parse_start_args(raw_input)
 
             try:
                 res = hetzner.create_server(
                     game=game,
                     seconds=seconds,
                     readable=readable,
-                    server_type="cpx32"
+                    server_type="cpx32",
+                    enable_logging=enable_logging
                 )
                 domain_info = f"`{res.get('domain')}` (IP: `{res.get('ip')}`)" if res.get('domain') else f"`{res.get('ip')}`"
                 msg = (
-                    f"🎮 **{res.get('game', '').upper()}-Server wird gestartet!**\n"
+                    f"🟡 **Hardware wird hochgefahren!**\n"
+                    f"🎮 **Spiel:** {res.get('game', '').upper()}\n"
                     f"🌐 **Adresse:** {domain_info}\n"
-                    f"⚡ **Typ:** `{res.get('server_type')}`\n"
-                    f"⏳ **Laufzeit:** {res.get('lifetime_readable')} *(danach Auto-Shutdown)*"
+                    f"⏳ **Laufzeit:** {res.get('lifetime_readable')}\n\n"
+                    f"*(Eine Benachrichtigung folgt, sobald der Server beitretbar ist!)*"
                 )
             except Exception as e:
                 msg = f"❌ Fehler beim Starten des Servers: {e}"
 
+        elif command_name == "log":
+            servers = hetzner.list_servers()
+            if not servers:
+                msg = "⚪ Kein aktiver Server online."
+            else:
+                target_ip = servers[0]["ip"]
+                try:
+                    req = urllib.request.Request(
+                        f"http://{target_ip}:8080/toggle-log",
+                        data=b"",
+                        headers={"x-auth-token": os.environ.get("AUTH_SECRET", "")},
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        res_data = json.loads(response.read().decode())
+                        state = "aktiviert" if res_data.get("logging") else "deaktiviert"
+                        msg = f"📡 **Live-Logs wurden {state}.**"
+                except Exception as e:
+                    msg = f"⚠️ Konnte Agenten nicht erreichen: {e}"
+
         else:
             msg = f"Unbekannter Befehl: `/{command_name}`"
 
-        # Direkte Antwort mit Type 4 (in einem einzigen HTTP-Turn)
         return build_response(200, {
             "type": 4,
             "data": {"content": msg}
@@ -112,17 +118,14 @@ def lambda_handler(event, context):
     if http_method == "OPTIONS":
         return build_response(200, {"message": "CORS OK"})
 
-    # Discord Webhook Signature
     if "x-signature-ed25519" in headers or "X-Signature-Ed25519" in headers:
         if not verify_discord_signature(headers, raw_body):
             return build_response(401, {"error": "Invalid Discord Signature"})
         try:
-            discord_body = json.loads(raw_body)
-            return handle_discord_interaction(discord_body)
+            return handle_discord_interaction(json.loads(raw_body))
         except Exception as e:
             return build_response(500, {"error": str(e)})
 
-    # REST API Auth
     if not is_authorized(headers):
         return build_response(401, {"error": "Unauthorized"})
 
@@ -137,33 +140,22 @@ def lambda_handler(event, context):
     action = body.get("action")
 
     try:
-        if raw_path.endswith("/help") or action == "help":
-            help_text = get_registered_discord_commands()
-            return build_response(200, {
-                "message": "Befehlsübersicht",
-                "help": help_text,
-                "endpoints": [
-                    {"path": "POST /start", "description": "Startet Server (Body: game, duration, server_type)"},
-                    {"path": "GET /status?server_id=<id>", "description": "Status einer spezifischen Instanz"},
-                    {"path": "GET /servers", "description": "Liste aller aktiven Instanzen"},
-                    {"path": "POST /stop", "description": "Löscht Server (Body: server_id)"},
-                    {"path": "GET /help", "description": "Zeigt diese Hilfeübersicht"}
-                ]
-            })
-
         if raw_path.endswith("/start") or action == "start":
             game_input = body.get("game", "minecraft")
             duration_input = body.get("duration")
             server_type = body.get("server_type", "cpx32")
+            enable_logging = body.get("logging", False)
 
             input_str = f"{game_input} {duration_input}" if duration_input else game_input
-            game, seconds, readable = parse_start_args(input_str)
+            game, seconds, readable, parsed_log = parse_start_args(input_str)
+            final_logging = enable_logging or parsed_log
 
             result = hetzner.create_server(
                 game=game,
                 seconds=seconds,
                 readable=readable,
-                server_type=server_type
+                server_type=server_type,
+                enable_logging=final_logging
             )
             return build_response(200, {
                 "message": "Server gestartet",
@@ -172,15 +164,7 @@ def lambda_handler(event, context):
             })
 
         if raw_path.endswith("/servers") or action == "list":
-            servers = hetzner.list_servers()
-            return build_response(200, {"data": servers})
-
-        if raw_path.endswith("/status") or action == "status":
-            query_params = event.get("queryStringParameters") or {}
-            server_id = body.get("server_id") or query_params.get("server_id")
-            if not server_id:
-                return build_response(400, {"error": "server_id fehlt"})
-            return build_response(200, {"data": hetzner.get_server_status(str(server_id))})
+            return build_response(200, {"data": hetzner.list_servers()})
 
         if raw_path.endswith("/stop") or action == "stop":
             server_id = body.get("server_id")
@@ -189,8 +173,22 @@ def lambda_handler(event, context):
                 if not active:
                     return build_response(400, {"error": "Kein aktiver Server gefunden"})
                 server_id = str(active[0]["server_id"])
-
             return build_response(200, {"data": hetzner.delete_server(str(server_id))})
+
+        if raw_path.endswith("/log") or action == "log":
+            servers = hetzner.list_servers()
+            if not servers:
+                return build_response(400, {"error": "Kein aktiver Server gefunden"})
+            target_ip = servers[0]["ip"]
+            req = urllib.request.Request(
+                f"http://{target_ip}:8080/toggle-log",
+                data=b"",
+                headers={"x-auth-token": os.environ.get("AUTH_SECRET", "")},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                res_data = json.loads(response.read().decode())
+                return build_response(200, res_data)
 
         return build_response(404, {"error": f"Endpoint '{raw_path}' nicht gefunden"})
     except Exception as e:

@@ -1,1 +1,12 @@
+# HTTP & Webhooks
+requests>=2.31.0
+
+# Umgebungsvariablen
+python-dotenv>=1.0.0
+
+# Discord Interaktions-Signaturvalidierung (Ed25519)
 pynacl>=1.5.0
+
+# Testing & Mocks
+pytest>=8.0.0
+pytest-mock>=3.12.0

@@ -38,20 +38,20 @@ fi
 AGENT_DIR="/opt/gameserver-agent"
 mkdir -p "${AGENT_DIR}"
 
-AUTH_HEADER=""
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  AUTH_HEADER="-H \"Authorization: token ${GITHUB_TOKEN}\""
-fi
-
 echo "[BOOTSTRAP] Lade aktuellste agent.py aus GitHub..."
-curl -sSL -H "Cache-Control: no-cache" ${AUTH_HEADER} \
+curl -fsSL -H "Cache-Control: no-cache" \
   "${GITHUB_REPO}/hetzner/agent.py?ts=$(date +%s)" \
   -o "${AGENT_DIR}/agent.py"
 
-# Python-Abhängigkeiten installieren (z. B. für Supabase REST-Calls)
-pip3 install -q requests python-dotenv
+# Python-Abhängigkeiten installieren (mit Flag für Ubuntu 24.04 PEP 668)
+pip3 install --break-system-packages -q requests python-dotenv
 
 # 5. systemd Service für den Agenten erstellen & starten
+ENABLE_LOG_ARG=""
+if [ "${ENABLE_LOGGING:-false}" = "true" ]; then
+  ENABLE_LOG_ARG="--enable-logging"
+fi
+
 cat << EOF > /etc/systemd/system/gameserver-agent.service
 [Unit]
 Description=On-Demand Gameserver Lifecycle & Billing Agent
@@ -63,7 +63,8 @@ WorkingDirectory=${AGENT_DIR}
 Environment="GAME_PORT=${GAME_PORT:-25565}"
 Environment="MAX_SECONDS=${MAX_SECONDS:-300}"
 Environment="VOLUME_DIR=${MOUNT_DIR}"
-ExecStart=/usr/bin/python3 ${AGENT_DIR}/agent.py --max-seconds ${MAX_SECONDS:-300} --port ${GAME_PORT:-25565}
+EnvironmentFile=${MOUNT_DIR}/secrets.env
+ExecStart=/usr/bin/python3 ${AGENT_DIR}/agent.py --max-seconds ${MAX_SECONDS:-300} --port ${GAME_PORT:-25565} ${ENABLE_LOG_ARG}
 Restart=always
 RestartSec=5
 

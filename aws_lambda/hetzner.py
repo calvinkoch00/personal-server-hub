@@ -2,6 +2,7 @@ import os
 import json
 import urllib.request
 import urllib.error
+import config
 from config import (
     HETZNER_API_TOKEN,
     LOCATION,
@@ -59,42 +60,43 @@ def update_godaddy_dns(ip: str):
         print(f"GoDaddy DNS Fehler/Timeout: {e}")
 
 
-def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = "5 Minute(n)", server_type: str = "cpx32") -> dict:
-    config_info = get_game_config(game)
-    if not config_info:
-        raise ValueError(f"Für das Spiel '{game}' ist kein Volume/Port konfiguriert.")
+def create_server(game: str = "minecraft", seconds: int = 300, readable: str = "5 Minute(n)", server_type: str = "cpx32", enable_logging: bool = False) -> dict:
+    # Volume-ID und Port anhand des Spiels ermitteln
+    volume_id = 107045799  # Standard Game-Volume ID
+    game_port = 25565
 
-    volume_id, game_port, clean_game = config_info
-    server_name = f"{clean_game}-ondemand"
+    user_data = config.get_stage1_bootloader(
+        volume_id=volume_id,
+        game_port=game_port,
+        max_seconds=seconds,
+        enable_logging=enable_logging
+    )
 
     payload = {
-        "name": server_name,
+        "name": f"{game}-ondemand",
         "server_type": server_type,
         "image": "ubuntu-24.04",
-        "location": LOCATION,
-        "start_after_create": True,
-        "volumes": [int(volume_id)],
-        "ssh_keys": [],
-        "user_data": get_stage1_bootloader(volume_id=volume_id, game_port=game_port, max_seconds=seconds)
+        "location": "nbg1",
+        "user_data": user_data,
+        "volumes": [volume_id],
+        "labels": {"game": game}
     }
 
-    res = _request("servers", method="POST", data=payload)
-    server = res.get("server", {})
-    public_ip = server.get("public_net", {}).get("ipv4", {}).get("ip")
+    resp = _request("/servers", method="POST", data=payload)
+    server_data = resp["server"]
+    server_ip = server_data["public_net"]["ipv4"]["ip"]
 
-    if public_ip and clean_game == "minecraft":
-        update_godaddy_dns(public_ip)
+    update_godaddy_dns(server_ip)
 
     return {
-        "server_id": server.get("id"),
-        "name": server.get("name"),
-        "status": server.get("status"),
-        "ip": public_ip,
-        "domain": f"{GODADDY_SUBDOMAIN}.{GODADDY_DOMAIN}",
-        "game": clean_game,
+        "server_id": server_data["id"],
+        "name": server_data["name"],
+        "game": game,
+        "ip": server_ip,
+        "domain": os.environ.get("DOMAIN_NAME", ""),
+        "lifetime_readable": readable,
         "server_type": server_type,
-        "lifetime_seconds": seconds,
-        "lifetime_readable": readable
+        "status": server_data["status"]
     }
 
 

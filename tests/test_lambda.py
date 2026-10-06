@@ -23,7 +23,6 @@ def test_unauthorized_request():
 # 2. Server Start Test
 @patch("hetzner.create_server")
 def test_start_endpoint_success(mock_create, auth_headers):
-    # Mocking: create_server Rückgabewert mit allen Pflichtfeldern
     mock_create.return_value = {
         "server_id": 123456,
         "name": "minecraft-ondemand",
@@ -74,7 +73,7 @@ def test_list_servers_endpoint(mock_list, auth_headers):
     assert body["data"][0]["ip"] == "5.6.7.8"
 
 
-# 4. Stop Server Test (über delete_server)
+# 4. Stop Server Test
 @patch("hetzner.delete_server")
 @patch("hetzner.list_servers")
 def test_stop_server_endpoint(mock_list, mock_delete, auth_headers):
@@ -105,7 +104,8 @@ def test_stage1_bootloader_generation():
     script = config.get_stage1_bootloader(
         volume_id=107045799,
         game_port=25565,
-        max_seconds=600
+        max_seconds=600,
+        enable_logging=True
     )
 
     assert script.startswith("#!/bin/bash")
@@ -113,23 +113,25 @@ def test_stage1_bootloader_generation():
     assert 'VOLUME_ID="107045799"' in script
     assert 'GAME_PORT="25565"' in script
     assert 'MAX_SECONDS="600"' in script
-    assert 'SUPABASE_URL="https://test.supabase.co"' in script
-    assert 'SUPABASE_KEY="test-sb-key"' in script
+    assert 'ENABLE_LOGGING="true"' in script
     assert "$MOUNT_DIR/secrets.env" in script
-    assert "raw.githubusercontent.com/calvinkoch00/personal-server-hub/main" in script
     assert "hetzner/bootstrap.sh" in script
     assert "exec /opt/bootstrap/bootstrap.sh" in script
 
 
-# 6. Flexible Zeiteingaben Test
+# 6. Flexible Zeiteingaben & Flag Test
 def test_parse_start_args():
-    _, secs_none, _ = parse_start_args(None)
+    _, secs_none, _, log_none = parse_start_args(None)
     assert secs_none == 300
+    assert log_none is False
 
-    _, secs_2h, label_2h = parse_start_args("2h")
+    _, secs_2h, label_2h, log_true = parse_start_args("2h logging=true")
     assert secs_2h == 7200
     assert "2" in label_2h
+    assert log_true is True
 
-    _, secs_comb, label_comb = parse_start_args("minecraft 45m")
+    game, secs_comb, label_comb, log_short = parse_start_args("minecraft 45m log")
+    assert game == "minecraft"
     assert secs_comb == 2700
     assert "45" in label_comb
+    assert log_short is True
