@@ -71,6 +71,7 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -u $AGENT_DIR/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
