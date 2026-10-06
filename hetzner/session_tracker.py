@@ -164,10 +164,19 @@ def tail_minecraft_logs():
                 pname = join_match.group("player") or join_match.group("player2") or join_match.group("player3")
                 if pname and pname.lower() != "server":
                     with lock:
-                        if pname not in active_sessions:
-                            print(f"[TRACKER] Erkenne Join von: {pname}", flush=True)
-                            sid = db_open_session(pname)
-                            active_sessions[pname] = {"session_id": sid}
+                        already_active = pname in active_sessions
+                        if not already_active:
+                            # Platzhalter sofort setzen, um Race-Conditions bei Folgezeilen abzufangen
+                            active_sessions[pname] = {"session_id": None}
+                    
+                    if not already_active:
+                        print(f"[TRACKER] Erkenne Join von: {pname}", flush=True)
+                        sid = db_open_session(pname)
+                        with lock:
+                            if sid:
+                                active_sessions[pname]["session_id"] = sid
+                            else:
+                                active_sessions.pop(pname, None)
 
             # Leave Event
             leave_match = LEAVE_REGEX.search(line)
