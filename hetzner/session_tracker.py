@@ -117,6 +117,16 @@ def lookup_discord_user(ingame_username: str) -> tuple[str | None, str | None]:
 # Session Management & Cache Logik
 # ==========================================
 
+def calculate_duration(joined_at_str: str, end_at_str: str) -> int:
+    """Berechnet die Spieldauer in vollen Sekunden."""
+    try:
+        t_start = datetime.datetime.fromisoformat(joined_at_str)
+        t_end = datetime.datetime.fromisoformat(end_at_str)
+        return max(0, int((t_end - t_start).total_seconds()))
+    except Exception:
+        return 0
+
+
 def flush_cache_to_supabase():
     """Gleicht Cache mit Supabase ab und löscht beendete Sessions."""
     with lock:
@@ -151,12 +161,14 @@ def recover_orphan_sessions_on_boot():
 
         print(f"[BOOT-RECOVERY] {len(cache)} Session(s) im lokalen Cache gefunden. Prüfe Integrität...", flush=True)
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        
+
         # Offene Sessions von früher schließen (waren durch Crash nicht beendet worden)
         for sid, sdata in cache.items():
             if sdata.get("left_at") is None:
-                sdata["left_at"] = sdata.get("fallback_end_at") or now_iso
+                end_iso = sdata.get("fallback_end_at") or now_iso
+                sdata["left_at"] = end_iso
                 sdata["close_reason"] = "crash_recovery"
+                sdata["duration_seconds"] = calculate_duration(sdata.get("joined_at", end_iso), end_iso)
 
         save_cache(cache)
 
@@ -167,10 +179,10 @@ def on_player_join(player_name: str):
     with lock:
         if player_name in active_players:
             return
-        
+
         session_id = str(uuid.uuid4())
         active_players[player_name] = session_id
-        
+
         discord_user_id, account_id = lookup_discord_user(player_name)
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -183,7 +195,8 @@ def on_player_join(player_name: str):
             "joined_at": now_iso,
             "fallback_end_at": now_iso,
             "left_at": None,
-            "close_reason": None
+            "close_reason": None,
+            "duration_seconds": None
         }
 
         cache = load_cache()
@@ -202,11 +215,13 @@ def on_player_leave(player_name: str, reason: str = "disconnect"):
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         cache = load_cache()
         if session_id in cache:
-            cache[session_id]["left_at"] = now_iso
-            cache[session_id]["fallback_end_at"] = now_iso
-            cache[session_id]["close_reason"] = reason
+            entry = cache[session_id]
+            entry["left_at"] = now_iso
+            entry["fallback_end_at"] = now_iso
+            entry["close_reason"] = reason
+            entry["duration_seconds"] = calculate_duration(entry.get("joined_at", now_iso), now_iso)
             save_cache(cache)
-            print(f"[TRACKER] - Leave: {player_name} ({reason}) -> Im Cache als beendet markiert", flush=True)
+            print(f"[TRACKER] - Leave: {player_name} ({reason}) -> Im Cache als beendet markiert (Dauer: {entry['duration_seconds']}s)", flush=True)
 
 
 def heartbeat_tick():
@@ -294,19 +309,24 @@ def tail_minecraft_logs():
         print(f"[TRACKER ERROR] Docker Stream Fehler: {e}", flush=True)
 
 
-def handle_sigterm(signum, frame):
-    global running
-    print("[TRACKER] SIGTERM empfangen. Schließe offene Sessions & synchronisiere final mit Supabase...", flush=True)
-    running = False
-    
+def cleanup_and_flush_sync():
+    """Wird synchron beim Beenden aufgerufen – blockiert bis alles bei Supabase ist."""
+    print("[TRACKER] Shutdown-Signal empfangen. Schließe offene Sessions...", flush=True)
     with lock:
         players = list(active_players.keys())
     for p in players:
         on_player_leave(p, reason="shutdown")
 
-    # Finaler Sync vor dem Shutdown
+    print("[TRACKER] Synchronisiere verbleibenden Cache mit Supabase...", flush=True)
     flush_cache_to_supabase()
-    sys.exit(0)
+    print("[TRACKER] Finaler Sync abgeschlossen. Beende Prozess sauber.", flush=True)
+
+
+def handle_sigterm(signum, frame):
+    global running
+    running = False
+    cleanup_and_flush_sync()
+    os._exit(0)
 
 
 def main():
