@@ -21,6 +21,8 @@ GAME_NAME = os.environ.get("GAME_NAME", "minecraft").lower()
 CACHE_FILE = os.path.join(MOUNT_DIR, "session_cache.json")
 SERVER_RUN_CACHE = os.path.join(MOUNT_DIR, "server_run.json")
 
+IDLE_STATE_FILE = "/tmp/last_player_activity"
+
 JOIN_REGEX = re.compile(
     r"UUID of player (?P<player>[a-zA-Z0-9_]{3,16}) is|"
     r": (?P<player2>[a-zA-Z0-9_]{3,16})\[.*\] logged in|"
@@ -36,6 +38,19 @@ running = True
 
 # active_players: ingame_username -> session_id
 active_players: dict[str, str] = {}
+
+
+# ==========================================
+# Idle / Activity Marker Helper
+# ==========================================
+
+def update_activity_marker():
+    """Schreibt den aktuellen Zeitpunkt als letzte Spieler-Aktivität."""
+    try:
+        with open(IDLE_STATE_FILE, "w", encoding="utf-8") as f:
+            f.write(str(int(time.time())))
+    except Exception:
+        pass
 
 
 # ==========================================
@@ -199,6 +214,9 @@ def on_player_join(player_name: str):
         session_id = str(uuid.uuid4())
         active_players[player_name] = session_id
 
+        # Aktivitätsmarker bei jedem Join erneuern
+        update_activity_marker()
+
         discord_user_id, account_id = lookup_discord_user(player_name)
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -227,6 +245,9 @@ def on_player_leave(player_name: str, reason: str = "disconnect"):
         if not session_id:
             return
 
+        # Zeitpunkt des Leaves als letzte Aktivität erfassen
+        update_activity_marker()
+
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         cache = load_cache()
         if session_id in cache:
@@ -243,6 +264,9 @@ def heartbeat_tick():
     with lock:
         if not active_players:
             return
+
+        # Solange Spieler online sind, Aktivität kontinuierlich auffrischen
+        update_activity_marker()
 
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         cache = load_cache()
@@ -347,6 +371,9 @@ def main():
     signal.signal(signal.SIGINT, handle_sigterm)
 
     print(f"[TRACKER] Starte robusten Session-Tracker (Offline-Cache & 10m-Sync) für: {GAME_NAME}", flush=True)
+
+    # Initialen Marker beim Boot setzen (damit ab dem Start gerechnet wird)
+    update_activity_marker()
 
     # Boot-Recovery: Spieler-Sessions & gecrashte Server-Runs abgleichen
     recover_orphan_sessions_on_boot()

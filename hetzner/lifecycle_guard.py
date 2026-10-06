@@ -19,6 +19,8 @@ MOUNT_DIR = os.environ.get("VOLUME_DIR", "/mnt/gamespeicher")
 FORCE_SHUTDOWN_FLAG = "/tmp/force_shutdown"
 SERVER_RUN_CACHE = os.path.join(MOUNT_DIR, "server_run.json")
 
+IDLE_STATE_FILE = "/tmp/last_player_activity"
+MAX_IDLE_SECONDS = 3600  # 1 Stunde ohne Spieler
 
 def send_status(msg: str):
     if DISCORD_STATUS_WEBHOOK:
@@ -119,6 +121,8 @@ def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
     
     if reason == "manual":
         send_status(f"🛑 **Server-Stop via Discord ausgeführt.** Server wird beendet (Laufzeit: {duration // 60}m).")
+    elif reason == "idle":
+        send_status(f"💤 **Auto-Idle-Stop:** Seit über 60 Minuten war kein Spieler mehr online. Server wird beendet (Laufzeit: {duration // 60}m).")
     else:
         send_status(f"🛑 **Laufzeit-Limit erreicht.** Server wird sauber beendet (Laufzeit: {duration // 60}m).")
 
@@ -185,7 +189,7 @@ def main():
             execute_shutdown(server_id, start_time, reason="manual")
             break
 
-        # 2. Timer-Ablauf prüfen
+        # 2. Timer-Ablauf prüfen (max-seconds)
         elapsed = time.time() - start_time
         remaining = max_seconds - elapsed
 
@@ -194,7 +198,20 @@ def main():
             execute_shutdown(server_id, start_time, reason="limit")
             break
 
-        # Minütlicher Heartbeat für Server-Run & Restzeit-Log
+        # 3. 1h-Idle-Check (erst nach 15min Schonfrist nach Boot)
+        if elapsed > 900 and os.path.exists(IDLE_STATE_FILE):
+            try:
+                with open(IDLE_STATE_FILE, "r", encoding="utf-8") as f:
+                    last_active = float(f.read().strip())
+                idle_seconds = time.time() - last_active
+
+                if idle_seconds >= MAX_IDLE_SECONDS:
+                    print(f"[GUARD] Idle-Timeout ({int(idle_seconds)}s ohne Spieler)! Fahre Server herunter...", flush=True)
+                    execute_shutdown(server_id, start_time, reason="idle")
+                    break
+            except Exception:
+                pass
+
         if int(elapsed) % 60 == 0:
             update_server_run_heartbeat(server_id, started_at_iso)
             print(f"[GUARD] Noch {int(remaining)} Sekunden verbleibend.", flush=True)
