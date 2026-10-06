@@ -6,6 +6,7 @@ import threading
 import re
 import signal
 import requests
+import subprocess
 from dotenv import load_dotenv
 
 load_dotenv("/mnt/gamespeicher/secrets.env")
@@ -125,46 +126,60 @@ def db_close_session(player_name: str, reason: str = "disconnect"):
 
 
 def tail_minecraft_logs():
-    log_candidates = [
-        os.path.join(MOUNT_DIR, "data", "logs", "latest.log"),
-        os.path.join(MOUNT_DIR, "logs", "latest.log"),
-    ]
-    target_log = None
-    print("[TRACKER] Warte auf latest.log...", flush=True)
-    while running and not target_log:
-        for p in log_candidates:
-            if os.path.exists(p):
-                target_log = p
+    print("[TRACKER] Warte auf laufenden Docker-Container...", flush=True)
+    cid = None
+    while running and not cid:
+        try:
+            res = subprocess.run(["docker", "ps", "-q"], capture_output=True, text=True)
+            cids = res.stdout.strip().split()
+            if cids and cids[0]:
+                cid = cids[0]
                 break
-        if not target_log:
-            time.sleep(1)
+        except Exception:
+            pass
+        time.sleep(1)
 
-    print(f"[TRACKER] Tailing aktiv auf: {target_log}", flush=True)
+    print(f"[TRACKER] Tailing aktiv via Docker Container: {cid}", flush=True)
+
     try:
-        with open(target_log, "r", encoding="utf-8", errors="ignore") as f:
-            while running:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
+        # Liest stdout und stderr des Containers live ab dem Start
+        proc = subprocess.Popen(
+            ["docker", "logs", "-f", "--tail", "20", cid],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
 
-                join_match = JOIN_REGEX.search(line)
-                if join_match:
-                    pname = join_match.group("player") or join_match.group("player2") or join_match.group("player3")
-                    if pname and pname != "server":
-                        with lock:
-                            if pname not in active_sessions:
-                                sid = db_open_session(pname)
-                                active_sessions[pname] = {"session_id": sid}
+        for line in iter(proc.stdout.readline, ''):
+            if not running:
+                break
+            line = line.strip()
+            if not line:
+                continue
 
-                leave_match = LEAVE_REGEX.search(line)
-                if leave_match:
-                    pname = leave_match.group("player") or leave_match.group("player2")
-                    if pname:
-                        db_close_session(pname, reason="disconnect")
+            # Join Event
+            join_match = JOIN_REGEX.search(line)
+            if join_match:
+                pname = join_match.group("player") or join_match.group("player2") or join_match.group("player3")
+                if pname and pname.lower() != "server":
+                    with lock:
+                        if pname not in active_sessions:
+                            print(f"[TRACKER] Erkenne Join von: {pname}", flush=True)
+                            sid = db_open_session(pname)
+                            active_sessions[pname] = {"session_id": sid}
+
+            # Leave Event
+            leave_match = LEAVE_REGEX.search(line)
+            if leave_match:
+                pname = leave_match.group("player") or leave_match.group("player2")
+                if pname and pname.lower() != "server":
+                    print(f"[TRACKER] Erkenne Leave von: {pname}", flush=True)
+                    db_close_session(pname, reason="disconnect")
+
+        proc.terminate()
     except Exception as e:
-        print(f"[TRACKER ERROR] Log Streamer Fehler: {e}", flush=True)
-
+        print(f"[TRACKER ERROR] Docker Stream Fehler: {e}", flush=True)
 
 def heartbeat_loop():
     while running:
