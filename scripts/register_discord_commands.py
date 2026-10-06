@@ -27,23 +27,27 @@ if not APP_ID or not BOT_TOKEN:
 commands = [
     {
         "name": "start",
-        "description": "Startet Server on demand (z. B. '/start' oder '/start 2h')",
+        "description": "Startet Server on demand (z. B. '/start 2h' oder '/start 2h log=true')",
         "options": [
             {
                 "type": 3,
                 "name": "args",
-                "description": "Optional: Laufzeit wie '2h', '3d' oder Spieltyp (Standard: minecraft 5m)",
+                "description": "Optional: Dauer ('2h', '3d'), Spiel oder Logging-Flag ('log=true')",
                 "required": False
             }
         ]
     },
     {
         "name": "status",
-        "description": "Zeigt alle aktiven Server an"
+        "description": "Zeigt alle aktiven Server samt IP an"
+    },
+    {
+        "name": "log",
+        "description": "Schaltet Live-Server-Logs im Discord-Kanal ein oder aus (Toggle)"
     },
     {
         "name": "stop",
-        "description": "Stoppt den laufenden Gameserver"
+        "description": "Stoppt und löscht den laufenden Gameserver"
     },
     {
         "name": "help",
@@ -80,10 +84,11 @@ try:
             lines.append(f"• `/{name}{opt_str}` — {desc}")
 
         lines.append(
-            "\n💡 **Beispiele für `/start`:**\n"
+            "\n💡 **Beispiele für `/start` & `/log`:**\n"
             "• `/start` *(Minecraft, 5 Minuten)*\n"
             "• `/start args: 2h` *(Minecraft, 2 Stunden)*\n"
-            "• `/start args: 3d` *(Minecraft, 3 Tage, max. 7d)*\n"
+            "• `/start args: 2h log=true` *(Minecraft, 2 Stunden mit Live-Logs)*\n"
+            "• `/log` *(Toggelt Live-Logs während der Server läuft)*\n"
             "• `/start args: <spiel> 4h` *(Anderes Spiel aus dem Speicher)*"
         )
         cache_content = "\n".join(lines)
