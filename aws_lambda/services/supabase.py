@@ -33,6 +33,29 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
         err_body = e.read().decode("utf-8") if e.fp else ""
         return e.code, err_body
 
+def upsert_game_account(discord_user_id: str, discord_username: str, game: str, ingame_username: str) -> dict:
+    """Schreibt Benutzer und Ingame-Account in das Supabase Star-Schema."""
+    # 1. User anlegen / aktualisieren
+    supabase_client_request(
+        "dim_users",
+        method="POST",
+        data={"discord_user_id": str(discord_user_id), "discord_username": str(discord_username)},
+        headers_extra={"Prefer": "resolution=merge-duplicates"}
+    )
+
+    # 2. Account verknüpfen
+    status, resp = supabase_client_request(
+        "dim_game_accounts",
+        method="POST",
+        data={
+            "discord_user_id": str(discord_user_id),
+            "game": game.strip().lower(),
+            "ingame_username": ingame_username.strip()
+        },
+        headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
+    )
+    return json.loads(resp) if status in [200, 201] else {"error": resp}
+
 
 def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
     val = (user_param or "").strip()
