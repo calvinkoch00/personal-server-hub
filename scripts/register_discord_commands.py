@@ -80,6 +80,30 @@ commands = [
         "description": "Stoppt und löscht den laufenden Gameserver"
     },
     {
+        "name": "costs",
+        "description": "Zeigt die Kosten und Spielzeiten an",
+        "options": [
+            {
+                "type": 3,
+                "name": "timeframe",
+                "description": "Zeitraum der Abrechnung",
+                "required": False,
+                "choices": [
+                    {"name": "Diesen Monat", "value": "this month"},
+                    {"name": "Letzten Monat", "value": "last month"},
+                    {"name": "Dieses Jahr", "value": "this year"},
+                    {"name": "Gesamte Laufzeit", "value": "all"}
+                ]
+            },
+            {
+                "type": 3,
+                "name": "user",
+                "description": "Nutzer filtern (all, me oder Username/ID)",
+                "required": False
+            }
+        ]
+    },
+    {
         "name": "addgameaccount",
         "description": "Verknüpft deinen Ingame-Namen mit deinem Discord-Profil",
         "options": [
@@ -124,6 +148,7 @@ try:
             "• `/status` — Zeigt alle aktiven Server samt IP an",
             "• `/log <mode>` — Schaltet Logs um (`all`, `game`, `off`)",
             "• `/stop` — Stoppt und sichert den laufenden Server",
+            "• `/costs [timeframe] [user]` — Zeigt Abrechnung & Spielzeiten",
             "• `/addgameaccount <game> <username>` — Verknüpft dein Profil",
             "• `/help` — Zeigt diese Übersicht an"
         ]

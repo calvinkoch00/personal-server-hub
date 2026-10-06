@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import datetime
 import urllib.request
 import urllib.error
 import hetzner
@@ -35,6 +36,34 @@ def supabase_client_request(endpoint: str, method: str = "POST", data: dict = No
         return e.code, err_body
 
 
+def parse_timeframe(tf_str: str) -> tuple[datetime.datetime | None, datetime.datetime | None, str]:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    tf = (tf_str or "this month").strip().lower()
+
+    if tf == "this month":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, None, "Diesen Monat"
+    elif tf == "last month":
+        first_of_this = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_day_prev = first_of_this - datetime.timedelta(days=1)
+        start_last = last_day_prev.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start_last, first_of_this, "Letzten Monat"
+    elif tf == "this year":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, None, "Dieses Jahr"
+    elif tf == "all":
+        return None, None, "Gesamte Laufzeit"
+    else:
+        parts = tf.split()
+        try:
+            start = datetime.datetime.fromisoformat(parts[0]).replace(tzinfo=datetime.timezone.utc)
+            end = datetime.datetime.fromisoformat(parts[1]).replace(tzinfo=datetime.timezone.utc) if len(parts) > 1 else None
+            return start, end, f"{parts[0]} bis {parts[1] if len(parts) > 1 else 'jetzt'}"
+        except Exception:
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            return start, None, "Diesen Monat"
+
+
 def get_help_message() -> str:
     cache_path = os.path.join(os.path.dirname(__file__), "commands_cache.txt")
     if os.path.exists(cache_path):
@@ -52,6 +81,7 @@ def get_help_message() -> str:
         "• `/status` — Zeigt alle aktiven Server samt IP an\n"
         "• `/log <mode>` — Schaltet Logs um (`all`, `game`, `off`)\n"
         "• `/stop` — Stoppt und löscht den laufenden Server\n"
+        "• `/costs` — Zeigt Serverkosten und Spielzeiten an (`timeframe`, `user`)\n"
         "• `/addgameaccount` — Verknüpft deinen Ingame-Namen mit Discord\n"
         "• `/help` — Zeigt diese Übersicht an"
     )
@@ -125,7 +155,6 @@ def handle_interaction(body: dict) -> dict:
         unit_map = {"m": 60, "h": 3600, "d": 86400}
         readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
 
-        # Unterstützt beliebige Zahlen (z. B. 12m, 48h, 7d)
         match = re.match(r"^(\d+)\s*([mhd])$", duration_raw)
         if match:
             val, unit = int(match.group(1)), match.group(2)
@@ -155,6 +184,7 @@ def handle_interaction(body: dict) -> dict:
             )
         except Exception as e:
             msg = f"❌ Fehler beim Starten des Servers: {e}"
+
     elif command == "log":
         servers = hetzner.list_servers()
         if not servers:
@@ -179,6 +209,50 @@ def handle_interaction(body: dict) -> dict:
             except Exception as e:
                 msg = f"⚠ Agent auf VM nicht erreichbar: {e}"
 
+    elif command == "costs":
+        options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
+        user_param = str(options.get("user", "all")).strip()
+        timeframe_param = str(options.get("timeframe", "this month")).strip()
+
+        caller_user_id = str((body.get("member", {}).get("user") or body.get("user", {})).get("id"))
+        if user_param.lower() == "me":
+            filter_user = caller_user_id
+        else:
+            filter_user = user_param.lstrip("@")
+
+        start_dt, end_dt, label_tf = parse_timeframe(timeframe_param)
+
+        payload = {
+            "filter_user": filter_user,
+            "from_date": start_dt.isoformat() if start_dt else None,
+            "to_date": end_dt.isoformat() if end_dt else None
+        }
+
+        status, resp_text = supabase_client_request("rpc/get_costs_summary", method="POST", data=payload)
+        if status not in [200, 201]:
+            msg = f"⚠️ Fehler beim Abrufen der Abrechnung ({status}): {resp_text}"
+        else:
+            try:
+                rows = json.loads(resp_text)
+                if not rows:
+                    msg = f"ℹ️ Keine Kosten oder Spielzeiten für **{label_tf}** gefunden."
+                else:
+                    total_server = rows[0].get("total_server_costs", 0.0)
+                    header = f"📊 **Kostenaufstellung ({label_tf})**\n*Server-Gesamtkosten: {float(total_server):.2f} €*\n"
+                    table = "```asciidoc\n"
+                    table += f"{'Spieler':<16} | {'Zeit':<7} | {'Anteil':<8} | {'Betrag'}\n"
+                    table += "-" * 42 + "\n"
+                    for r in rows:
+                        name = str(r.get("discord_username") or "Unknown")[:15]
+                        hours = f"{float(r.get('hours_played', 0)):.1f}h"
+                        share = f"{float(r.get('share_percent', 0)):.1f}%"
+                        cost = f"{float(r.get('amount_due_euro', 0)):.2f} €"
+                        table += f"{name:<16} | {hours:<7} | {share:<8} | {cost}\n"
+                    table += "```"
+                    msg = header + table
+            except Exception as e:
+                msg = f"❌ Fehler beim Formatieren der Abrechnung: {e}"
+
     elif command == "addgameaccount":
         user_data = body.get("member", {}).get("user") or body.get("user", {})
         discord_user_id = str(user_data.get("id"))
@@ -192,26 +266,41 @@ def handle_interaction(body: dict) -> dict:
             msg = "❌ Bitte gib Spiel und Ingame-Namen an: `/addgameaccount <game> <username>`"
         else:
             try:
+                # 1. Sicherstellen, dass User in dim_users existiert
                 supabase_client_request(
                     "dim_users",
                     method="POST",
                     data={"discord_user_id": discord_user_id, "discord_username": discord_username},
                     headers_extra={"Prefer": "resolution=merge-duplicates"}
                 )
-                status_a, resp_a = supabase_client_request(
-                    "dim_game_accounts",
-                    method="POST",
-                    data={
-                        "discord_user_id": discord_user_id,
-                        "game": game,
-                        "ingame_username": username
-                    },
-                    headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
-                )
-                if status_a in [200, 201]:
-                    msg = f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
+
+                # 2. Prüfen, ob der Ingame-Account bereits registriert ist
+                endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id"
+                status_check, resp_check = supabase_client_request(endpoint_check, method="GET")
+                existing_accounts = json.loads(resp_check) if status_check == 200 else []
+
+                if existing_accounts:
+                    owner_id = str(existing_accounts[0].get("discord_user_id"))
+                    if owner_id == discord_user_id:
+                        msg = f"ℹ️ Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
+                    else:
+                        msg = f"⛔ **Zugriff verweigert:** Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit einem anderen Discord-Account verknüpft!"
                 else:
-                    msg = f"⚠ Fehler beim Verknüpfen ({status_a}): {resp_a}"
+                    # 3. Neu anlegen
+                    status_a, resp_a = supabase_client_request(
+                        "dim_game_accounts",
+                        method="POST",
+                        data={
+                            "discord_user_id": discord_user_id,
+                            "game": game,
+                            "ingame_username": username
+                        },
+                        headers_extra={"Prefer": "return=representation"}
+                    )
+                    if status_a in [200, 201]:
+                        msg = f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
+                    else:
+                        msg = f"⚠ Fehler beim Verknüpfen ({status_a}): {resp_a}"
             except Exception as e:
                 msg = f"❌ Datenbankfehler: {e}"
     else:
