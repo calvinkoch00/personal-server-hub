@@ -6,12 +6,10 @@ LOCATION = os.environ.get("LOCATION", "nbg1")
 AUTH_SECRET = os.environ.get("AUTH_SECRET")
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY")
 DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID")
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-DISCORD_STATUS_WEBHOOK_URL = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", "")
 
 DEFAULT_GAME = "minecraft"
-DEFAULT_LIFETIME_SECONDS = 300  # 5 Minuten Standard
-MAX_LIFETIME_SECONDS = 7 * 24 * 3600  # 7 Tage Max
+DEFAULT_LIFETIME_SECONDS = 300
+MAX_LIFETIME_SECONDS = 7 * 24 * 3600
 
 VOLUME_MAPPING = {
     "minecraft": os.environ.get("VOLUME_ID_MINECRAFT", os.environ.get("VOLUME_ID", "107045799")),
@@ -66,64 +64,20 @@ def parse_start_args(raw_input: str | None) -> tuple[str, int, str]:
     return game, seconds, readable
 
 def get_cloud_init_script(max_seconds: int = 300, volume_id: int = 107045799) -> str:
-    webhook_url = DISCORD_STATUS_WEBHOOK_URL
     return f"""#cloud-config
-write_files:
-  - path: /etc/systemd/system/minecraft-shutdown.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=Graceful Minecraft Docker Stop on Shutdown
-      DefaultDependencies=no
-      Before=shutdown.target reboot.target halt.target poweroff.target
-      RequiresMountsFor=/mnt/gamespeicher
-
-      [Service]
-      Type=oneshot
-      RemainAfterExit=true
-      ExecStart=/bin/true
-      ExecStop=/bin/bash -c '\
-        if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"💾 **Server fährt herunter:** Weltdaten werden gesichert...\\"}}" "{webhook_url}" || true; fi; \
-        cd /mnt/gamespeicher && docker compose stop -t 30 && sync; \
-        if [ -n "{webhook_url}" ]; then curl -s -H "Content-Type: application/json" -X POST -d "{{\\"content\\": \\"🛑 **Minecraft beendet:** Chunks gesichert, Volume bereit zum Aushängen.\\"}}" "{webhook_url}" || true; fi'
-      TimeoutStopSec=45
-
-      [Install]
-      WantedBy=multi-user.target
-
-  - path: /root/autostart.sh
-    permissions: '0755'
-    content: |
-      #!/bin/bash
-      set -e
-
-      if ! command -v docker &> /dev/null; then
-        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-        sh /tmp/get-docker.sh
-      fi
-
-      mkdir -p /mnt/gamespeicher
-      mount -o discard,defaults /dev/disk/by-id/scsi-0HC_Volume_{volume_id} /mnt/gamespeicher || true
-
-      systemctl daemon-reload
-      systemctl enable --now minecraft-shutdown.service
-
-      if [ -d /mnt/gamespeicher ]; then
-        cd /mnt/gamespeicher && docker compose up -d || true
-      fi
-
-      if [ -n "{webhook_url}" ]; then
-        curl -s -H "Content-Type: application/json" -X POST \
-          -d '{{"content": "🟢 **Minecraft-Server ist bereit!** Verbinde dich über `mc.calvinkoch.ch`."}}' \
-          "{webhook_url}" || true
-      fi
-
-      # Auto-Shutdown nach Ablauf der Lebenszeit
-      sleep {max_seconds}
-      SERVER_ID=$(curl -s http://169.254.169.254/hetzner/v1/metadata/instance-id)
-      # Initiiert sauberen Shutdown über Hetzner Actions API (triggert systemd ExecStop)
-      curl -s -X POST -H "Authorization: Bearer {HETZNER_API_TOKEN}" "https://api.hetzner.cloud/v1/servers/$SERVER_ID/actions/shutdown"
-
 runcmd:
-  - systemd-run --unit=server-autokill /root/autostart.sh
+  - |
+    set -e
+    if ! command -v docker &> /dev/null; then
+      curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+      sh /tmp/get-docker.sh
+    fi
+
+    mkdir -p /mnt/gamespeicher
+    mount -o discard,defaults /dev/disk/by-id/scsi-0HC_Volume_{volume_id} /mnt/gamespeicher
+
+    cd /mnt/gamespeicher
+    docker compose up -d
+
+    python3 /mnt/gamespeicher/agent.py --max-seconds {max_seconds} &
 """

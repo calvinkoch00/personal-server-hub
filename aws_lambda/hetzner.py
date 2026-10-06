@@ -1,11 +1,11 @@
 import os
 import json
-import time
 import urllib.request
 import urllib.error
 from config import (
     HETZNER_API_TOKEN,
     LOCATION,
+    AUTH_SECRET,
     get_volume_for_game,
     get_cloud_init_script,
     DEFAULT_GAME
@@ -36,9 +36,8 @@ def _request(endpoint: str, method: str = "GET", data: dict = None) -> dict:
 
 
 def update_godaddy_dns(ip: str):
-    """Aktualisiert den A-Record bei GoDaddy auf die neue Server-IP."""
+    """Aktualisiert den A-Record bei GoDaddy."""
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:
-        print("GoDaddy API Keys fehlen, DNS-Update übersprungen.")
         return
 
     url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records/A/{GODADDY_SUBDOMAIN}"
@@ -55,9 +54,9 @@ def update_godaddy_dns(ip: str):
     )
     try:
         with urllib.request.urlopen(req, timeout=1.5) as resp:
-            print(f"GoDaddy DNS erfolgreich aktualisiert: {GODADDY_SUBDOMAIN}.{GODADDY_DOMAIN} -> {ip} (Status {resp.status})")
+            print(f"GoDaddy DNS aktualisiert: {resp.status}")
     except Exception as e:
-        print(f"GoDaddy DNS Fehler/Timeout (nicht blockierend): {e}")
+        print(f"GoDaddy DNS Fehler/Timeout: {e}")
 
 
 def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = "5 Minute(n)", server_type: str = "cpx32") -> dict:
@@ -83,7 +82,6 @@ def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = 
     server = res.get("server", {})
     public_ip = server.get("public_net", {}).get("ipv4", {}).get("ip")
 
-    # GoDaddy A-Record direkt im Hintergrund aktualisieren
     if public_ip and clean_game == "minecraft":
         update_godaddy_dns(public_ip)
 
@@ -97,16 +95,6 @@ def create_server(game: str = DEFAULT_GAME, seconds: int = 300, readable: str = 
         "server_type": server_type,
         "lifetime_seconds": seconds,
         "lifetime_readable": readable
-    }
-
-
-def get_server_status(server_id: str) -> dict:
-    res = _request(f"servers/{server_id}", method="GET")
-    server = res.get("server", {})
-    return {
-        "server_id": server.get("id"),
-        "status": server.get("status"),
-        "ip": server.get("public_net", {}).get("ipv4", {}).get("ip")
     }
 
 
@@ -126,37 +114,33 @@ def list_servers() -> list:
     return results
 
 
-def shutdown_server(server_id: str) -> dict:
-    """Sendet ein ACPI-Shutdown-Signal an die VM."""
-    res = _request(f"servers/{server_id}/actions/shutdown", method="POST")
-    return {"message": "Server fährt sauber herunter", "action": res.get("action")}
+def get_server_status(server_id: str) -> dict:
+    res = _request(f"servers/{server_id}", method="GET")
+    server = res.get("server", {})
+    return {
+        "server_id": server.get("id"),
+        "status": server.get("status"),
+        "ip": server.get("public_net", {}).get("ipv4", {}).get("ip")
+    }
 
 
 def delete_server(server_id: str) -> dict:
-    """Löscht die VM sofort hart."""
     res = _request(f"servers/{server_id}", method="DELETE")
     return {"message": "Server wird gelöscht", "action": res.get("action")}
 
 
-def graceful_stop_and_delete(server_id: str, max_wait_seconds: int = 25) -> dict:
-    """Sendet ACPI-Shutdown, wartet bis die VM komplett 'off' ist (Docker beendet) und löscht sie erst dann."""
+def trigger_server_graceful_stop(server_ip: str, server_id: str) -> dict:
+    """Sendet den Shutdown-Befehl an den Agenten auf der VM (Port 8080)."""
+    url = f"http://{server_ip}:8080/stop"
+    req = urllib.request.Request(
+        url,
+        data=b"{}",
+        headers={"Content-Type": "application/json", "x-auth-token": AUTH_SECRET or ""},
+        method="POST"
+    )
     try:
-        _request(f"servers/{server_id}/actions/shutdown", method="POST")
-        print(f"ACPI-Shutdown für Server {server_id} gesendet.")
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return {"status": "graceful_triggered"}
     except Exception as e:
-        print(f"Fehler beim Senden des Shutdown-Signals: {e}")
-
-    start_time = time.time()
-    while time.time() - start_time < max_wait_seconds:
-        try:
-            status_info = get_server_status(server_id)
-            if status_info.get("status") == "off":
-                print(f"Server {server_id} ist sauber beendet (Status 'off'). Lösche VM...")
-                return delete_server(server_id)
-        except Exception as e:
-            print(f"Statusabfrage-Info: {e}")
-            return {"message": "Server existiert nicht mehr"}
-        time.sleep(2)
-
-    print(f"Timeout erreicht ({max_wait_seconds}s), erzwinge Löschen für Server {server_id}...")
-    return delete_server(server_id)
+        print(f"Agent auf VM nicht erreichbar ({e}), lösche direkt via Hetzner API...")
+        return delete_server(server_id)
