@@ -38,16 +38,8 @@ commands = [
             {
                 "type": 3,
                 "name": "duration",
-                "description": "Laufzeit auswählen (Standard: 5m)",
-                "required": False,
-                "choices": [
-                    {"name": "5 Minuten (Test)", "value": "5m"},
-                    {"name": "30 Minuten", "value": "30m"},
-                    {"name": "1 Stunde", "value": "1h"},
-                    {"name": "2 Stunden", "value": "2h"},
-                    {"name": "4 Stunden", "value": "4h"},
-                    {"name": "1 Tag", "value": "1d"}
-                ]
+                "description": "Laufzeit frei eingeben (z. B. 45m, 8h, 2d — Standard: 5m)",
+                "required": False
             },
             {
                 "type": 3,

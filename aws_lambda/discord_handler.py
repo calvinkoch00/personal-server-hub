@@ -125,7 +125,8 @@ def handle_interaction(body: dict) -> dict:
         unit_map = {"m": 60, "h": 3600, "d": 86400}
         readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
 
-        match = re.match(r"^(\d+)([mhd])$", duration_raw)
+        # Unterstützt beliebige Zahlen (z. B. 12m, 48h, 7d)
+        match = re.match(r"^(\d+)\s*([mhd])$", duration_raw)
         if match:
             val, unit = int(match.group(1)), match.group(2)
             seconds = val * unit_map[unit]
@@ -154,7 +155,6 @@ def handle_interaction(body: dict) -> dict:
             )
         except Exception as e:
             msg = f"❌ Fehler beim Starten des Servers: {e}"
-
     elif command == "log":
         servers = hetzner.list_servers()
         if not servers:
