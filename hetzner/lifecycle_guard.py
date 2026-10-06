@@ -33,6 +33,36 @@ def get_hetzner_instance_id() -> str:
     return ""
 
 
+def flush_final_shutdown_logs():
+    """Sendet die letzten Container-Logs (z. B. Welt-Speicherung, All Chunks Saved) explizit an Discord."""
+    if not DISCORD_LOG_WEBHOOK:
+        return
+
+    try:
+        res = subprocess.run(
+            ["docker", "ps", "-a", "-q"],
+            capture_output=True,
+            text=True
+        )
+        cids = res.stdout.strip().split()
+        if not cids or not cids[0]:
+            return
+
+        cid = cids[0]
+        logs = subprocess.run(
+            ["docker", "logs", "--tail", "25", cid],
+            capture_output=True,
+            text=True
+        )
+        raw_text = (logs.stdout or "") + (logs.stderr or "")
+        if raw_text.strip():
+            chunk = raw_text[-1800:].strip()
+            msg = f"📋 **Finale Shutdown-Logs:**\n```asciidoc\n{chunk}\n```"
+            requests.post(DISCORD_LOG_WEBHOOK, json={"content": msg}, timeout=5)
+    except Exception as e:
+        print(f"[GUARD] Finaler Log-Flush fehlgeschlagen: {e}", flush=True)
+
+
 def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
     duration = int(time.time() - start_time)
     
@@ -50,14 +80,14 @@ def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
     subprocess.run(["docker", "compose", "-f", f"{MOUNT_DIR}/docker-compose.yml", "stop", "-t", "60"], check=False)
     subprocess.run(["sync"], check=False)
 
-    # 3. Control API stoppen
-    print("[GUARD] 3. Stoppe Control API...", flush=True)
-    subprocess.run(["systemctl", "stop", "gameserver-control.service"], check=False)
+    # 3. Finale Logs aus dem gestoppten Container direkt nach Discord pushen
+    print("[GUARD] 3. Sende finale Shutdown-Logs an Discord...", flush=True)
+    flush_final_shutdown_logs()
 
-    # 4. Streamer nach kurzem Puffer-Flush stoppen
-    print("[GUARD] 4. Warte kurz auf finalen Log-Stream & stoppe Streamer...", flush=True)
-    time.sleep(3)
+    # 4. Streamer & Control API stoppen
+    print("[GUARD] 4. Stoppe Streamer und Control API...", flush=True)
     subprocess.run(["systemctl", "stop", "gameserver-logs.service"], check=False)
+    subprocess.run(["systemctl", "stop", "gameserver-control.service"], check=False)
 
     # 5. Volume sauber aushängen
     print("[GUARD] 5. Unmounte Volume...", flush=True)
