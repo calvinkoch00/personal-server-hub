@@ -29,7 +29,7 @@ def create_server(
     seconds: int = 300,
     readable: str = "5 Minute(n)",
     server_type: str = "cpx32",
-    enable_logging: bool = False
+    enable_logging: str = "none"
 ) -> dict:
     game_cfg = get_game_config(game)
     volume_id = game_cfg.get("volume_id", 107045799)
@@ -60,12 +60,15 @@ def create_server(
     update_godaddy_dns(server_ip)
     log_server_start_to_supabase(server_data["id"], game, resolved_type)
 
+    subdomain = os.environ.get("GODADDY_SUBDOMAIN", "mc")
+    domain = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
+
     return {
         "server_id": server_data["id"],
         "name": server_data["name"],
         "game": game,
         "ip": server_ip,
-        "domain": os.environ.get("DOMAIN_NAME", f"{os.environ.get('GODADDY_SUBDOMAIN', 'mc')}.{os.environ.get('GODADDY_DOMAIN', 'calvinkoch.ch')}"),
+        "domain": os.environ.get("DOMAIN_NAME", f"{subdomain}.{domain}"),
         "lifetime_readable": readable,
         "server_type": resolved_type,
         "status": server_data["status"]

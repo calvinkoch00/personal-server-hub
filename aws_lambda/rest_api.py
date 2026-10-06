@@ -56,28 +56,35 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     graceful_success = False
     if target_ip:
         try:
-            agent.stop_remote_server(target_ip)
-            graceful_success = True
-        except Exception:
-            pass
+            # Sendet das Signal an den Agenten (dieser setzt /tmp/force_shutdown)
+            res = agent.stop_remote_server(target_ip)
+            if res.get("status") == "stopping":
+                graceful_success = True
+        except Exception as e:
+            print(f"[REST_API] Agent auf {target_ip} nicht erreichbar: {e}")
 
     if graceful_success:
-        delete_res = hetzner.delete_server(target_id)
+        # Der Guard auf der VM kümmert sich nun um:
+        # 1. Tracker stoppen & Sessions flushen
+        # 2. Server-Run in Supabase schließen
+        # 3. Docker sauber beenden & Chunks sichern
+        # 4. Shutdown-Logs an Discord schicken
+        # 5. Sich selbst bei Hetzner löschen
         return 200, {
-            "message": f"Server {target['name']} gelöscht",
-            "hetzner_action": delete_res.get("action"),
+            "message": f"Shutdown für {target['name']} eingeleitet",
             "target": target,
             "mode": "graceful"
         }
     else:
+        # Nur wenn der Agent offline ist, löschen wir die VM direkt per Hetzner API
         delete_res = hetzner.delete_server(target_id)
         return 200, {
-            "message": f"Server {target['name']} gelöscht",
+            "message": f"Server {target['name']} direkt via Hetzner-API gelöscht",
             "hetzner_action": delete_res.get("action"),
             "target": target,
             "mode": "direct"
         }
-
+    
 def handle_log(payload: dict) -> tuple[int, dict]:
     servers = hetzner.list_servers()
     if not servers:
