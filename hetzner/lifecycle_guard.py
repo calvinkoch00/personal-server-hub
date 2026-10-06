@@ -3,7 +3,6 @@ import sys
 import time
 import argparse
 import subprocess
-import datetime
 import requests
 from dotenv import load_dotenv
 
@@ -11,10 +10,7 @@ load_dotenv("/mnt/gamespeicher/secrets.env")
 
 HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN")
 DISCORD_STATUS_WEBHOOK = os.environ.get("DISCORD_STATUS_WEBHOOK_URL")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 MOUNT_DIR = os.environ.get("VOLUME_DIR", "/mnt/gamespeicher")
-GAME_NAME = os.environ.get("GAME_NAME", "minecraft")
 
 
 def send_status(msg: str):
@@ -35,48 +31,16 @@ def get_hetzner_instance_id() -> str:
     return ""
 
 
-def log_session_to_supabase(start_time: float):
-    """Loggt die Server-Session in player_sessions."""
-    if not (SUPABASE_URL and SUPABASE_KEY):
-        print("[GUARD] Supabase Credentials fehlen, überspringe Logging.")
-        return
-
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_sessions"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
-    }
-
-    joined_iso = datetime.datetime.fromtimestamp(start_time, tz=datetime.timezone.utc).isoformat()
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    payload = {
-        "player_name": f"server-{GAME_NAME}",
-        "joined_at": joined_iso,
-        "fallback_end_at": now_iso,
-        "left_at": now_iso,
-        "close_reason": "shutdown"
-    }
-
-    try:
-        r = requests.post(url, json=payload, headers=headers, timeout=5)
-        print(f"[GUARD] Supabase Log Status: {r.status_code}")
-    except Exception as e:
-        print(f"[GUARD] Supabase Fehler: {e}")
-
-
 def execute_shutdown(server_id: str, start_time: float):
     duration = int(time.time() - start_time)
-    send_status(f"🛑 **Laufzeit-Limit erreicht.** Server wird beendet (Laufzeit: {duration // 60}m).")
+    send_status(f"🛑 **Laufzeit-Limit erreicht.** Server wird sauber beendet (Laufzeit: {duration // 60}m).")
 
-    print("[GUARD] 1. Stoppe Docker-Container...")
+    print("[GUARD] 1. Stoppe Tracker-Dienst (damit offene Sessions finalisiert werden)...")
+    subprocess.run(["systemctl", "stop", "gameserver-tracker.service"], check=False)
+
+    print("[GUARD] 2. Stoppe Docker-Container...")
     subprocess.run(["docker", "compose", "-f", f"{MOUNT_DIR}/docker-compose.yml", "stop"], check=False)
     subprocess.run(["sync"], check=False)
-
-    print("[GUARD] 2. Logge Session zu Supabase...")
-    log_session_to_supabase(start_time)
 
     print("[GUARD] 3. Unmounte Volume...")
     subprocess.run(["umount", MOUNT_DIR], check=False)

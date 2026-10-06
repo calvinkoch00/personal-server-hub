@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "[BOOTSTRAP] Starte Stage-2 Bootloader..."
 
-# 1. Erforderliche Host-Pakete sicherstellen
+# 1. Host-Pakete sicherstellen
 apt-get update -y
 apt-get install -y conntrack jq python3-pip curl
 
@@ -38,18 +38,17 @@ AGENT_DIR="/opt/gameserver-agent"
 mkdir -p "$AGENT_DIR"
 echo "[BOOTSTRAP] Lade modulare Agenten aus GitHub..."
 
-for script in lifecycle_guard.py log_streamer.py control_api.py; do
+for script in lifecycle_guard.py session_tracker.py log_streamer.py control_api.py; do
     curl -fsSL -H "Cache-Control: no-cache" \
         "$GITHUB_REPO/hetzner/$script?ts=$(date +%s)" \
         -o "$AGENT_DIR/$script"
 done
 
-# Python-Abhängigkeiten installieren (Ubuntu 24.04 kompatibel)
 pip3 install --break-system-packages requests python-dotenv
 
-# 5. Drei separate systemd Services erstellen & aktivieren
+# 5. Vier separate systemd Services erstellen
 
-# Service 1: Lifecycle Guard & Killswitch
+# Service 1: Lifecycle Guard
 cat << EOF > /etc/systemd/system/gameserver-guard.service
 [Unit]
 Description=Gameserver Lifecycle Guard & Killswitch
@@ -60,7 +59,6 @@ Type=simple
 WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
 Environment=VOLUME_DIR=$MOUNT_DIR
-Environment=GAME_NAME=${GAME:-minecraft}
 ExecStart=/usr/bin/python3 $AGENT_DIR/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
 Restart=always
 RestartSec=5
@@ -69,7 +67,27 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# Service 2: Log Streamer & Readiness Alert
+# Service 2: Session Tracker
+cat << EOF > /etc/systemd/system/gameserver-tracker.service
+[Unit]
+Description=Gameserver Player Session Tracker
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$AGENT_DIR
+EnvironmentFile=$MOUNT_DIR/secrets.env
+Environment=VOLUME_DIR=$MOUNT_DIR
+Environment=GAME_NAME=${GAME:-minecraft}
+ExecStart=/usr/bin/python3 $AGENT_DIR/session_tracker.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Service 3: Log Streamer & Readiness
 cat << EOF > /etc/systemd/system/gameserver-logs.service
 [Unit]
 Description=Gameserver Log Streamer & Readiness
@@ -88,7 +106,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# Service 3: Control API (Port 8080 für Lambda /stop und /log)
+# Service 4: Control API
 cat << EOF > /etc/systemd/system/gameserver-control.service
 [Unit]
 Description=Gameserver Control API (Port 8080)
@@ -107,8 +125,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now gameserver-guard.service gameserver-logs.service gameserver-control.service
-echo "[BOOTSTRAP] Alle 3 Agent-Services gestartet!"
+systemctl enable --now gameserver-guard.service gameserver-tracker.service gameserver-logs.service gameserver-control.service
+echo "[BOOTSTRAP] Alle 4 Services gestartet!"
 
 # 6. Spielcontainer via Docker Compose starten
 if [ -f "$MOUNT_DIR/docker-compose.yml" ] || [ -f "$MOUNT_DIR/compose.yml" ]; then

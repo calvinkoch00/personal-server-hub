@@ -52,6 +52,24 @@ commands = [
     {
         "name": "help",
         "description": "Zeigt alle Befehle und Beispiele an"
+    },
+    {
+        "name": "addgameaccount",
+        "description": "Verknüpft deinen Ingame-Namen mit deinem Discord-Account für das Session-Tracking",
+        "options": [
+            {
+                "type": 3,  # STRING
+                "name": "game",
+                "description": "Das Spiel (z. B. minecraft)",
+                "required": True
+            },
+            {
+                "type": 3,  # STRING
+                "name": "username",
+                "description": "Dein Ingame-Name (z. B. gamesbond00)",
+                "required": True
+            }
+        ]
     }
 ]
 
