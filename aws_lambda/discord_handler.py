@@ -118,6 +118,47 @@ def handle_interaction(body: dict) -> dict:
                     msg = f"📡 **Live-Logs wurden {state}.**"
             except Exception as e:
                 msg = f"⚠ Agent auf VM nicht erreichbar: {e}"
+    elif command == "addgameaccount":
+        # Discord User ermitteln
+        user_data = body.get("member", {}).get("user") or body.get("user", {})
+        discord_user_id = str(user_data.get("id"))
+        discord_username = str(user_data.get("username", "Unknown"))
+
+        options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
+        game = str(options.get("game", "")).strip().lower()
+        username = str(options.get("username", "")).strip()
+
+        if not game or not username:
+            msg = "❌ Bitte gib Spiel und Ingame-Namen an: `/addgameaccount <game> <username>`"
+        else:
+            try:
+                # 1. User in dim_users upserten
+                supabase_client_request(
+                    "dim_users",
+                    method="POST",
+                    data={"discord_user_id": discord_user_id, "discord_username": discord_username},
+                    headers_extra={"Prefer": "resolution=merge-duplicates"}
+                )
+
+                # 2. Game-Account in dim_game_accounts verknüpfen
+                res = supabase_client_request(
+                    "dim_game_accounts",
+                    method="POST",
+                    data={
+                        "discord_user_id": discord_user_id,
+                        "game": game,
+                        "ingame_username": username
+                    },
+                    headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
+                )
+
+                if res.status_code in [200, 201]:
+                    msg = f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
+                else:
+                    msg = f"⚠ Fehler beim Verknüpfen ({res.status_code}): {res.text}"
+            except Exception as e:
+                msg = f"❌ Datenbankfehler: {e}"
+
     else:
         msg = f"Unbekannter Befehl: `/{command}`"
 

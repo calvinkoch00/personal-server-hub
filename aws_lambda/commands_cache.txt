@@ -1,12 +1,15 @@
 📖 **Verfügbare Server-Befehle:**
 
+• `/addgameaccount <game> <username>` — Verknüpft deinen Ingame-Namen mit deinem Discord-Account für das Session-Tracking
 • `/help` — Zeigt alle Befehle und Beispiele an
-• `/start [args]` — Startet Server on demand (z. B. '/start' oder '/start 2h')
-• `/status` — Zeigt alle aktiven Server an
-• `/stop` — Stoppt den laufenden Gameserver
+• `/log` — Schaltet Live-Server-Logs im Discord-Kanal ein oder aus (Toggle)
+• `/start [args]` — Startet Server on demand (z. B. '/start 2h' oder '/start 2h log=true')
+• `/status` — Zeigt alle aktiven Server samt IP an
+• `/stop` — Stoppt und löscht den laufenden Gameserver
 
-💡 **Beispiele für `/start`:**
+💡 **Beispiele für `/start` & `/log`:**
 • `/start` *(Minecraft, 5 Minuten)*
 • `/start args: 2h` *(Minecraft, 2 Stunden)*
-• `/start args: 3d` *(Minecraft, 3 Tage, max. 7d)*
+• `/start args: 2h log=true` *(Minecraft, 2 Stunden mit Live-Logs)*
+• `/log` *(Toggelt Live-Logs während der Server läuft)*
 • `/start args: <spiel> 4h` *(Anderes Spiel aus dem Speicher)*
