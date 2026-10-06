@@ -34,37 +34,78 @@ if ! mountpoint -q "${MOUNT_DIR}"; then
   echo "[BOOTSTRAP] Volume erfolgreich gemountet nach ${MOUNT_DIR}."
 fi
 
-# 4. Agenten von GitHub beziehen
+# 4. Modulare Skripte von GitHub beziehen
 AGENT_DIR="/opt/gameserver-agent"
 mkdir -p "${AGENT_DIR}"
 
-echo "[BOOTSTRAP] Lade aktuellste agent.py aus GitHub..."
-curl -fsSL -H "Cache-Control: no-cache" \
-  "${GITHUB_REPO}/hetzner/agent.py?ts=$(date +%s)" \
-  -o "${AGENT_DIR}/agent.py"
+SCRIPTS=("lifecycle_guard.py" "log_streamer.py" "control_api.py")
+for script in "${SCRIPTS[@]}"; do
+  echo "[BOOTSTRAP] Lade ${script}..."
+  curl -fsSL -H "Cache-Control: no-cache" \
+    "${GITHUB_REPO}/hetzner/${script}?ts=$(date +%s)" \
+    -o "${AGENT_DIR}/${script}"
+done
 
-# Python-Abhängigkeiten installieren (mit Flag für Ubuntu 24.04 PEP 668)
+# Python-Abhängigkeiten installieren (Ubuntu 24.04 PEP 668 konform)
 pip3 install --break-system-packages -q requests python-dotenv
 
-# 5. systemd Service für den Agenten erstellen & starten
-ENABLE_LOG_ARG=""
-if [ "${ENABLE_LOGGING:-false}" = "true" ]; then
-  ENABLE_LOG_ARG="--enable-logging"
-fi
+# 5. systemd Services anlegen
 
-cat << EOF > /etc/systemd/system/gameserver-agent.service
+# A. Lifecycle Guard (Autonomer Kill-Switch, Auto-Shutdown & Supabase Billing)
+cat << EOF > /etc/systemd/system/gameserver-guard.service
 [Unit]
-Description=On-Demand Gameserver Lifecycle & Billing Agent
+Description=Server Lifecycle & Auto-Kill Guard
 After=network.target docker.service
 
 [Service]
 Type=simple
 WorkingDirectory=${AGENT_DIR}
-Environment="GAME_PORT=${GAME_PORT:-25565}"
 Environment="MAX_SECONDS=${MAX_SECONDS:-300}"
 Environment="VOLUME_DIR=${MOUNT_DIR}"
+Environment="GAME_NAME=${GAME_NAME:-minecraft}"
 EnvironmentFile=${MOUNT_DIR}/secrets.env
-ExecStart=/usr/bin/python3 ${AGENT_DIR}/agent.py --max-seconds ${MAX_SECONDS:-300} --port ${GAME_PORT:-25565} ${ENABLE_LOG_ARG}
+ExecStart=/usr/bin/python3 ${AGENT_DIR}/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# B. Control API (Port 8080 für Lambda /stop und /log Toggle sowie lokale Log-Endpunkte)
+cat << EOF > /etc/systemd/system/gameserver-control.service
+[Unit]
+Description=Gameserver Control & Logging API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${AGENT_DIR}
+EnvironmentFile=${MOUNT_DIR}/secrets.env
+ExecStart=/usr/bin/python3 ${AGENT_DIR}/control_api.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# C. Discord Log Streamer & Readiness Check
+ENABLE_LOG_ARG=""
+if [ "${ENABLE_LOGGING:-false}" = "true" ]; then
+  ENABLE_LOG_ARG="--enable-logging"
+fi
+
+cat << EOF > /etc/systemd/system/gameserver-logs.service
+[Unit]
+Description=Discord Log Streamer & Readiness Detector
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=${AGENT_DIR}
+EnvironmentFile=${MOUNT_DIR}/secrets.env
+ExecStart=/usr/bin/python3 ${AGENT_DIR}/log_streamer.py ${ENABLE_LOG_ARG}
 Restart=always
 RestartSec=5
 
@@ -72,9 +113,10 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+# Services registrieren und starten
 systemctl daemon-reload
-systemctl enable --now gameserver-agent.service
-echo "[BOOTSTRAP] Agent-Service gestartet."
+systemctl enable --now gameserver-guard.service gameserver-control.service gameserver-logs.service
+echo "[BOOTSTRAP] Alle Agent-Services gestartet."
 
 # 6. Spielcontainer via Docker Compose starten
 if [ -f "${MOUNT_DIR}/docker-compose.yml" ] || [ -f "${MOUNT_DIR}/compose.yaml" ]; then
