@@ -61,15 +61,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": f"Invalid payload: {e}"})
             return
 
-        # 3. Graceful Stop Befehl von Lambda
+        # 3. Graceful Stop Befehl von Lambda / Discord
         if self.path == "/stop":
             if self.headers.get("x-auth-token") != AUTH_SECRET:
                 self._send_json(401, {"error": "Unauthorized"})
                 return
 
-            # Signalisiert dem Host den sofortigen Shutdown
-            os.system("systemctl stop gameserver-guard.service || true")
-            os.system("shutdown -h now &")
+            # Signalisiere dem Guard-Prozess sofortigen Shutdown & Hetzner-Löschung
+            with open("/tmp/force_shutdown", "w") as f:
+                f.write("1")
+
             self._send_json(200, {"status": "stopping"})
             return
 

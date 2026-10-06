@@ -91,14 +91,15 @@ def main():
         elapsed = time.time() - start_time
         remaining = max_seconds - elapsed
 
-        if remaining <= 0:
-            print("[GUARD] Zeit abgelaufen! Leite Shutdown ein...")
+        # Prüfe ob Zeit abgelaufen ODER /stop getriggert wurde
+        if remaining <= 0 or os.path.exists("/tmp/force_shutdown"):
+            if os.path.exists("/tmp/force_shutdown"):
+                print("[GUARD] Manueller Stop über /stop empfangen! Fahre herunter...")
+            else:
+                print("[GUARD] Zeit abgelaufen! Fahre herunter...")
+
             execute_shutdown(server_id, start_time)
             break
-
-        # Logge alle 60 Sekunden den Status
-        if int(elapsed) % 60 == 0:
-            print(f"[GUARD] Noch {int(remaining)} Sekunden verbleibend.")
 
         time.sleep(1)
 

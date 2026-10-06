@@ -1,6 +1,8 @@
+import os
+import json
+import urllib.request
 from config import parse_start_args
 import hetzner
-import agent_client
 
 
 def get_help_message() -> str:
@@ -36,7 +38,10 @@ def handle_interaction(body: dict) -> dict:
         if not servers:
             msg = "⚪ Es läuft aktuell kein Server."
         else:
-            lines = [f"• `{s['name']}` (ID: {s['server_id']}) — `{s['status']}` — IP: `{s['ip']}`" for s in servers]
+            lines = [
+                f"• `{s['name']}` (ID: {s['server_id']}) — `{s.get('status', 'unknown')}` — IP: `{s['ip']}`"
+                for s in servers
+            ]
             msg = "🟢 **Aktive Server:**\n" + "\n".join(lines)
 
     elif command == "stop":
@@ -45,12 +50,29 @@ def handle_interaction(body: dict) -> dict:
             msg = "⚪ Kein laufender Server zum Stoppen vorhanden."
         else:
             target = servers[0]
+            target_ip = target.get("ip")
+            target_id = str(target.get("server_id"))
+
             try:
-                agent_client.stop_remote_server(target["ip"])
+                # Versuche den Graceful-Stop über den Port 8080 Agenten auf der VM
+                if hasattr(hetzner, "trigger_server_graceful_stop"):
+                    hetzner.trigger_server_graceful_stop(target_ip, target_id)
+                else:
+                    # Direkter HTTP-Call an den Agenten falls kein Wrapper vorhanden
+                    auth_secret = os.environ.get("AUTH_SECRET", "")
+                    req = urllib.request.Request(
+                        f"http://{target_ip}:8080/stop",
+                        data=b"{}",
+                        headers={"Content-Type": "application/json", "x-auth-token": auth_secret},
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=3):
+                        pass
                 msg = f"🛑 **Shutdown für `{target['name']}` eingeleitet.** (Container sichern & VM löschen)"
             except Exception:
-                hetzner.delete_server(str(target["server_id"]))
-                msg = f"🛑 **Server `{target['name']}` direkt via API gelöscht.**"
+                # Fallback: Direktes Löschen über die Hetzner Cloud API
+                hetzner.delete_server(target_id)
+                msg = f"🛑 **Server `{target['name']}` direkt via Hetzner-API gelöscht.**"
 
     elif command == "start":
         options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
@@ -62,6 +84,7 @@ def handle_interaction(body: dict) -> dict:
                 game=game,
                 seconds=seconds,
                 readable=readable,
+                server_type="cpx32",
                 enable_logging=enable_logging
             )
             addr = f"`{res.get('domain')}` (IP: `{res.get('ip')}`)" if res.get("domain") else f"`{res.get('ip')}`"
@@ -69,7 +92,7 @@ def handle_interaction(body: dict) -> dict:
                 f"🟡 **Hardware wird hochgefahren!**\n"
                 f"🎮 **Spiel:** {res.get('game', '').upper()}\n"
                 f"🌐 **Adresse:** {addr}\n"
-                f"⏳ **Laufzeit:** {res.get('lifetime_readable')}\n\n"
+                f"⏳ **Laufzeit:** {res.get('lifetime_readable', readable)}\n\n"
                 f"*(Bereitschaftsmeldung folgt automatisch, sobald der Server beitretbar ist!)*"
             )
         except Exception as e:
@@ -80,13 +103,21 @@ def handle_interaction(body: dict) -> dict:
         if not servers:
             msg = "⚪ Kein aktiver Server online."
         else:
-            target_ip = servers[0]["ip"]
+            target_ip = servers[0].get("ip")
             try:
-                res = agent_client.toggle_remote_logging(target_ip)
-                state = "aktiviert" if res.get("logging") else "deaktiviert"
-                msg = f"📡 **Live-Logs wurden {state}.**"
+                auth_secret = os.environ.get("AUTH_SECRET", "")
+                req = urllib.request.Request(
+                    f"http://{target_ip}:8080/toggle-log",
+                    data=b"",
+                    headers={"x-auth-token": auth_secret},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    res_data = json.loads(resp.read().decode())
+                    state = "aktiviert" if res_data.get("logging") else "deaktiviert"
+                    msg = f"📡 **Live-Logs wurden {state}.**"
             except Exception as e:
-                msg = f"⚠️️ Agent auf VM nicht erreichbar: {e}"
+                msg = f"⚠ Agent auf VM nicht erreichbar: {e}"
     else:
         msg = f"Unbekannter Befehl: `/{command}`"
 

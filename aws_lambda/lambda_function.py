@@ -80,13 +80,26 @@ def lambda_handler(event, context):
             return json_response(200, {"data": hetzner.list_servers()})
 
         if raw_path.endswith("/stop") or action == "stop":
-            server_id = body.get("server_id")
             servers = hetzner.list_servers()
-            if not server_id:
-                if not servers:
-                    return json_response(400, {"error": "Kein aktiver Server vorhanden"})
-                server_id = str(servers[0]["server_id"])
-            return json_response(200, {"data": hetzner.delete_server(str(server_id))})
+            if not servers:
+                return json_response(400, {"error": "Kein aktiver Server vorhanden"})
+
+            server_id = body.get("server_id")
+            target = next((s for s in servers if str(s["server_id"]) == str(server_id)), servers[0])
+
+            # Graceful Stop Versuch auf der VM
+            if target.get("ip"):
+                try:
+                    agent_client.stop_remote_server(target["ip"])
+                except Exception:
+                    pass
+
+            # Hetzner API Delete aufrufen und Bestätigung abwarten
+            delete_res = hetzner.delete_server(str(target["server_id"]))
+            return json_response(200, {
+                "message": f"Server {target['name']} gelöscht",
+                "hetzner_action": delete_res.get("action")
+            })
 
         if raw_path.endswith("/log") or action == "log":
             servers = hetzner.list_servers()
