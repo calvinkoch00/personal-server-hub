@@ -56,22 +56,20 @@ fi
 
 # 5. Vier separate systemd Services erstellen
 
-# Service 1: Lifecycle Guard
-cat << EOF > /etc/systemd/system/gameserver-guard.service
+# Service 1: Log Streamer & Readiness (startet als erstes, damit alles mitgeloggt wird)
+cat << EOF > /etc/systemd/system/gameserver-logs.service
 [Unit]
-Description=Gameserver Lifecycle Guard & Killswitch
+Description=Gameserver Log Streamer & Readiness
 After=network.target docker.service
 
 [Service]
 Type=simple
 WorkingDirectory=$AGENT_DIR
 EnvironmentFile=$MOUNT_DIR/secrets.env
-Environment=VOLUME_DIR=$MOUNT_DIR
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -u $AGENT_DIR/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
+ExecStart=/usr/bin/python3 -u $AGENT_DIR/log_streamer.py
 Restart=always
 RestartSec=5
-TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -93,31 +91,13 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -u $AGENT_DIR/session_tracker.py
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Service 3: Log Streamer & Readiness
-cat << EOF > /etc/systemd/system/gameserver-logs.service
-[Unit]
-Description=Gameserver Log Streamer & Readiness
-After=network.target docker.service
-
-[Service]
-Type=simple
-WorkingDirectory=$AGENT_DIR
-EnvironmentFile=$MOUNT_DIR/secrets.env
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -u $AGENT_DIR/log_streamer.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Service 4: Control API
+# Service 3: Control API
 cat << EOF > /etc/systemd/system/gameserver-control.service
 [Unit]
 Description=Gameserver Control API (Port 8080)
@@ -136,8 +116,38 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+# Service 4: Lifecycle Guard
+cat << EOF > /etc/systemd/system/gameserver-guard.service
+[Unit]
+Description=Gameserver Lifecycle Guard & Killswitch
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$AGENT_DIR
+EnvironmentFile=$MOUNT_DIR/secrets.env
+Environment=VOLUME_DIR=$MOUNT_DIR
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u $AGENT_DIR/lifecycle_guard.py --max-seconds ${MAX_SECONDS:-300}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
-systemctl enable --now gameserver-guard.service gameserver-tracker.service gameserver-logs.service gameserver-control.service
+
+# Definierte Start-Reihenfolge:
+# 1. Streamer an (lauscht sofort)
+systemctl enable --now gameserver-logs.service
+# 2. Tracker an (Boot-Recovery & Docker-Tail)
+systemctl enable --now gameserver-tracker.service
+# 3. Control API an
+systemctl enable --now gameserver-control.service
+# 4. Guard an (überwacht Lifetime)
+systemctl enable --now gameserver-guard.service
+
 echo "[BOOTSTRAP] Alle 4 Services gestartet!"
 
 # 6. Spielcontainer via Docker Compose starten
