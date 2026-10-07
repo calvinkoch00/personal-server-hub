@@ -25,3 +25,9 @@ def toggle_remote_logging(server_ip: str, mode: str = "game") -> dict:
 
 def stop_remote_server(server_ip: str) -> dict:
     return call_agent_remote(server_ip, "stop", timeout=2.0)
+
+def add_remote_whitelist(server_ip: str, username: str, is_op: bool = False) -> dict:
+    return call_agent_remote(server_ip, "whitelist/add", data={"username": username, "op": is_op}, timeout=4.0)
+
+def remove_remote_whitelist(server_ip: str, username: str) -> dict:
+    return call_agent_remote(server_ip, "whitelist/remove", data={"username": username}, timeout=4.0)

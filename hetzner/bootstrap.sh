@@ -56,7 +56,7 @@ fi
 
 # 5. Vier separate systemd Services erstellen
 
-# Service 1: Log Streamer & Readiness (startet als erstes, damit alles mitgeloggt wird)
+# Service 1: Log Streamer & Readiness
 cat << EOF > /etc/systemd/system/gameserver-logs.service
 [Unit]
 Description=Gameserver Log Streamer & Readiness
@@ -138,19 +138,46 @@ EOF
 
 systemctl daemon-reload
 
-# Definierte Start-Reihenfolge:
-# 1. Streamer an (lauscht sofort)
 systemctl enable --now gameserver-logs.service
-# 2. Tracker an (Boot-Recovery & Docker-Tail)
 systemctl enable --now gameserver-tracker.service
-# 3. Control API an
 systemctl enable --now gameserver-control.service
-# 4. Guard an (überwacht Lifetime)
 systemctl enable --now gameserver-guard.service
 
 echo "[BOOTSTRAP] Alle 4 Services gestartet!"
 
-# 6. Spielcontainer via Docker Compose starten
+# 6. Whitelist & OPs vorab aus Supabase ziehen (Boot Option A)
+if [ -n "${SERVER_ID:-}" ] && [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_KEY:-}" ]; then
+    echo "[BOOTSTRAP] Erstelle whitelist.json und ops.json aus Supabase..."
+    WL_JSON=$(curl -fsSL \
+        -H "apikey: $SUPABASE_KEY" \
+        -H "Authorization: Bearer $SUPABASE_KEY" \
+        "$SUPABASE_URL/rest/v1/map_server_whitelist?server_id=eq.$SERVER_ID&select=role,dim_game_accounts(ingame_username,mojang_uuid)" || echo "[]")
+
+    mkdir -p "$MOUNT_DIR/data"
+    python3 -c "
+import json
+try:
+    data = json.loads('''$WL_JSON''')
+    whitelist = []
+    ops = []
+    for entry in data:
+        acc = entry.get('dim_game_accounts') or {}
+        uuid = acc.get('mojang_uuid')
+        name = acc.get('ingame_username')
+        if uuid and name:
+            whitelist.append({'uuid': uuid, 'name': name})
+            if entry.get('role') == 'server-admin':
+                ops.append({'uuid': uuid, 'name': name, 'level': 4, 'bypassesPlayerLimit': False})
+    with open('$MOUNT_DIR/data/whitelist.json', 'w') as f:
+        json.dump(whitelist, f, indent=2)
+    with open('$MOUNT_DIR/data/ops.json', 'w') as f:
+        json.dump(ops, f, indent=2)
+except Exception as e:
+    print(f'[BOOTSTRAP WARNING] Whitelist Generierung Fehler: {e}')
+" || echo "[BOOTSTRAP] Whitelist-Generierung übersprungen"
+fi
+
+# 7. Spielcontainer via Docker Compose starten
 if [ -f "$MOUNT_DIR/docker-compose.yml" ] || [ -f "$MOUNT_DIR/compose.yml" ]; then
     echo "[BOOTSTRAP] Starte Gameserver Container..."
     cd "$MOUNT_DIR"

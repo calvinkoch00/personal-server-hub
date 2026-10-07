@@ -1,5 +1,6 @@
 import os
 import json
+import subprocess
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -40,7 +41,6 @@ class Handler(BaseHTTPRequestHandler):
             with open(CONFIG_FILE, "w") as f:
                 f.write(mode)
 
-            # Abwärtskompatibilität: Legacy Flag-Datei aktualisieren
             legacy_flag = "/tmp/discord_logging_enabled"
             if mode != "off":
                 with open(legacy_flag, "w") as f:
@@ -53,7 +53,6 @@ class Handler(BaseHTTPRequestHandler):
 
         # 2. Lokale Log-API für Gameserver-Plugins & interne Programme
         if self.path == "/emit-log":
-            # Erlaubt Localhost (127.0.0.1) ohne Token, externe Calls benötigen AUTH_SECRET
             client_ip = self.client_address[0]
             if client_ip != "127.0.0.1" and self.headers.get("x-auth-token") != AUTH_SECRET:
                 self._send_json(401, {"error": "Unauthorized"})
@@ -76,13 +75,52 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": f"Invalid payload: {e}"})
             return
 
-        # 3. Graceful Stop Befehl von Lambda / Discord
+        # 3. Whitelist Live-Management via Docker Console
+        if self.path in ["/whitelist/add", "/whitelist/remove"]:
+            if self.headers.get("x-auth-token") != AUTH_SECRET:
+                self._send_json(401, {"error": "Unauthorized"})
+                return
+
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(content_len).decode("utf-8"))
+                user = payload.get("username", "").strip()
+                is_op = payload.get("op", False)
+            except Exception:
+                user = ""
+                is_op = False
+
+            if not user:
+                self._send_json(400, {"error": "Missing username"})
+                return
+
+            try:
+                cids = subprocess.check_output(["docker", "ps", "-q"], text=True).strip().split()
+                cid = cids[0] if cids else None
+                if not cid:
+                    self._send_json(503, {"error": "No running container"})
+                    return
+
+                if self.path == "/whitelist/add":
+                    subprocess.run(["docker", "exec", cid, "rcon-cli", f"whitelist add {user}"], check=False)
+                    if is_op:
+                        subprocess.run(["docker", "exec", cid, "rcon-cli", f"op {user}"], check=False)
+                else:
+                    subprocess.run(["docker", "exec", cid, "rcon-cli", f"whitelist remove {user}"], check=False)
+                    subprocess.run(["docker", "exec", cid, "rcon-cli", f"deop {user}"], check=False)
+
+                subprocess.run(["docker", "exec", cid, "rcon-cli", "whitelist reload"], check=False)
+                self._send_json(200, {"status": "ok", "user": user})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+            return
+
+        # 4. Graceful Stop Befehl von Lambda / Discord
         if self.path == "/stop":
             if self.headers.get("x-auth-token") != AUTH_SECRET:
                 self._send_json(401, {"error": "Unauthorized"})
                 return
 
-            # Signalisiere dem Guard-Prozess sofortigen Shutdown & Hetzner-Löschung
             with open("/tmp/force_shutdown", "w") as f:
                 f.write("1")
 

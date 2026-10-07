@@ -71,7 +71,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         except Exception as e:
             print(f"[REST_API] Agent auf {target_ip} nicht erreichbar: {e}")
 
-    # dim_servers status auf offline setzen
     supabase.supabase_client_request(
         f"dim_servers?full_name=eq.{target['name']}",
         method="PATCH",
@@ -94,7 +93,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         }
 
 def handle_server_create(payload: dict) -> tuple[int, dict]:
-    """Erstellt ein Hetzner Volume und registriert den Server in dim_servers."""
     game = str(payload.get("game", "minecraft")).strip().lower()
     raw_name = str(payload.get("server_name") or payload.get("name", "")).strip().lower().replace(" ", "_")
     caller_id = payload.get("discord_user_id")
@@ -106,12 +104,10 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
     if not raw_name or not re.match(r"^[a-z0-9_-]+$", raw_name):
         return 400, {"error": "Servername darf nur Kleinbuchstaben, Zahlen, - und _ enthalten"}
 
-    # Prüfen auf Namens-Kollision
     status_c, resp_c = supabase.supabase_client_request(f"dim_servers?server_name=eq.{raw_name}&status=neq.deleted", method="GET")
     if status_c == 200 and json.loads(resp_c):
         return 400, {"error": f"Ein aktiver Server mit dem Namen '{raw_name}' existiert bereits."}
 
-    # Volume bei Hetzner erstellen
     volume_name = f"vol-{game}-{raw_name}"[:32]
     vol = hetzner.create_volume(name=volume_name, size_gb=20, location="nbg1")
     volume_id = vol.get("id")
@@ -135,7 +131,6 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
     return 201, {"message": f"Server '{raw_name}' erfolgreich erstellt", "server": json.loads(resp_sb)[0]}
 
 def handle_server_delete(payload: dict) -> tuple[int, dict]:
-    """Löscht Volume bei Hetzner, DNS-Record und markiert Server als deleted."""
     raw_name = str(payload.get("server_name") or payload.get("name", "")).strip().lower()
     caller_id = payload.get("discord_user_id")
 
@@ -326,6 +321,189 @@ def handle_dns_records(payload: dict) -> tuple[int, dict]:
         return 200, {"records": json.loads(resp)}
     return status, {"error": f"Fehler beim Laden der DNS-Records: {resp}"}
 
+# ==========================================
+# Feature 4: Hybrid Whitelist Handler
+# ==========================================
+
+def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
+    server_name = str(payload.get("server_name") or "default").strip().lower().replace(" ", "_")
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    raw_user = str(payload.get("username", "")).strip()
+    caller_id = str(payload.get("discord_user_id", ""))
+    target_role = "server-admin" if payload.get("role") == "server-admin" else "player"
+
+    if not raw_user:
+        return 400, {"error": "Parameter 'username' fehlt"}
+
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_name=eq.{server_name}&status=neq.deleted", method="GET"
+    )
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{server_name}' nicht gefunden"}
+    srv = json.loads(resp_s)[0]
+    srv_id = srv["server_id"]
+    vm_full_name = srv.get("full_name")
+
+    status_u, resp_u = supabase.supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
+    caller_global_role = json.loads(resp_u)[0].get("role") if status_u == 200 and json.loads(resp_u) else "user"
+
+    is_superadmin = caller_global_role == "superadmin"
+    is_server_creator = srv.get("created_by") == caller_id
+
+    status_acc, resp_acc = supabase.supabase_client_request(
+        f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{raw_user}&select=id,discord_user_id,ingame_username", method="GET"
+    )
+    accounts = json.loads(resp_acc) if status_acc == 200 else []
+    if not accounts:
+        return 404, {"error": f"Account '{raw_user}' ist noch nicht via /addgameaccount registriert."}
+    acc = accounts[0]
+    acc_id = acc["id"]
+    acc_discord_id = str(acc["discord_user_id"])
+    canonical_user = acc["ingame_username"]
+
+    if not (is_superadmin or is_server_creator):
+        if srv.get("whitelist_policy") == "admin_only":
+            return 403, {"error": "Nur Administratoren dürfen Spieler zu diesem Server hinzufügen."}
+        if acc_discord_id != caller_id:
+            return 403, {"error": "Du kannst dich bei dieser Policy nur selbst hinzufügen."}
+
+    wl_payload = {
+        "server_id": srv_id,
+        "account_id": acc_id,
+        "discord_user_id": acc_discord_id,
+        "role": target_role
+    }
+    status_w, resp_w = supabase.supabase_client_request(
+        "map_server_whitelist",
+        method="POST",
+        data=wl_payload,
+        headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
+    )
+    if status_w not in [200, 201]:
+        return status_w, {"error": f"Fehler beim Speichern der Whitelist: {resp_w}"}
+
+    live_synced = False
+    active_servers = hetzner.list_servers()
+    matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
+
+    if matched_vm and matched_vm.get("ip"):
+        if srv.get("status") != "online":
+            supabase.supabase_client_request(
+                f"dim_servers?server_id=eq.{srv_id}",
+                method="PATCH",
+                data={"status": "online"}
+            )
+        try:
+            res_agent = agent.add_remote_whitelist(matched_vm["ip"], canonical_user, is_op=(target_role == "server-admin"))
+            live_synced = res_agent.get("status") == "ok"
+        except Exception as e:
+            print(f"[WHITELIST SYNC ERROR] {e}")
+    else:
+        if srv.get("status") == "online":
+            supabase.supabase_client_request(
+                f"dim_servers?server_id=eq.{srv_id}",
+                method="PATCH",
+                data={"status": "offline"}
+            )
+
+    return 200, {
+        "status": "added",
+        "username": canonical_user,
+        "server": srv["display_name"],
+        "role": target_role,
+        "live_synced": live_synced
+    }
+
+def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
+    server_name = str(payload.get("server_name") or "default").strip().lower().replace(" ", "_")
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    raw_user = str(payload.get("username", "")).strip()
+    caller_id = str(payload.get("discord_user_id", ""))
+
+    if not raw_user:
+        return 400, {"error": "Parameter 'username' fehlt"}
+
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_name=eq.{server_name}&status=neq.deleted", method="GET"
+    )
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{server_name}' nicht gefunden"}
+    srv = json.loads(resp_s)[0]
+    srv_id = srv["server_id"]
+    vm_full_name = srv.get("full_name")
+
+    status_u, resp_u = supabase.supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
+    caller_global_role = json.loads(resp_u)[0].get("role") if status_u == 200 and json.loads(resp_u) else "user"
+    if caller_global_role != "superadmin" and srv.get("created_by") != caller_id:
+        return 403, {"error": "Nur Server-Admins können Spieler von der Whitelist entfernen."}
+
+    status_acc, resp_acc = supabase.supabase_client_request(
+        f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{raw_user}&select=id,ingame_username", method="GET"
+    )
+    accounts = json.loads(resp_acc) if status_acc == 200 else []
+    if not accounts:
+        return 404, {"error": f"Account '{raw_user}' nicht gefunden"}
+    acc_id = accounts[0]["id"]
+    canonical_user = accounts[0]["ingame_username"]
+
+    supabase.supabase_client_request(
+        f"map_server_whitelist?server_id=eq.{srv_id}&account_id=eq.{acc_id}",
+        method="DELETE"
+    )
+
+    live_synced = False
+    active_servers = hetzner.list_servers()
+    matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
+
+    if matched_vm and matched_vm.get("ip"):
+        if srv.get("status") != "online":
+            supabase.supabase_client_request(
+                f"dim_servers?server_id=eq.{srv_id}",
+                method="PATCH",
+                data={"status": "online"}
+            )
+        try:
+            res_agent = agent.remove_remote_whitelist(matched_vm["ip"], canonical_user)
+            live_synced = res_agent.get("status") == "ok"
+        except Exception as e:
+            print(f"[WHITELIST SYNC ERROR] {e}")
+    else:
+        if srv.get("status") == "online":
+            supabase.supabase_client_request(
+                f"dim_servers?server_id=eq.{srv_id}",
+                method="PATCH",
+                data={"status": "offline"}
+            )
+
+    return 200, {
+        "status": "removed",
+        "username": canonical_user,
+        "server": srv["display_name"],
+        "live_synced": live_synced
+    }
+
+def handle_whitelist_list(payload: dict) -> tuple[int, dict]:
+    server_name = str(payload.get("server_name") or "default").strip().lower().replace(" ", "_")
+    game = str(payload.get("game", "minecraft")).strip().lower()
+
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_name=eq.{server_name}&status=neq.deleted", method="GET"
+    )
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{server_name}' nicht gefunden"}
+    srv = json.loads(resp_s)[0]
+
+    status_w, resp_w = supabase.supabase_client_request(
+        f"map_server_whitelist?server_id=eq.{srv['server_id']}&select=role,dim_game_accounts(ingame_username,mojang_uuid)",
+        method="GET"
+    )
+    rows = json.loads(resp_w) if status_w == 200 else []
+    return 200, {
+        "server": srv["display_name"],
+        "policy": srv["whitelist_policy"],
+        "entries": rows
+    }
+
 def route_request(path: str, body: dict) -> tuple[int, dict]:
     raw_path = path or "/"
     action = body.get("action")
@@ -363,5 +541,13 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
         return handle_dns_sync(body)
     if raw_path.endswith("/dns/records") or action == "dns_records":
         return handle_dns_records(body)
+
+    # Whitelist
+    if raw_path.endswith("/whitelist/add") or action == "whitelist_add":
+        return handle_whitelist_add(body)
+    if raw_path.endswith("/whitelist/remove") or action == "whitelist_remove":
+        return handle_whitelist_remove(body)
+    if raw_path.endswith("/whitelist/list") or action == "whitelist_list":
+        return handle_whitelist_list(body)
 
     return 404, {"error": f"Endpoint '{raw_path}' nicht gefunden"}
