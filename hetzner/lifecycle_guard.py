@@ -115,6 +115,23 @@ def flush_final_shutdown_logs():
     except Exception as e:
         print(f"[GUARD] Finaler Log-Flush fehlgeschlagen: {e}", flush=True)
 
+def set_server_offline_in_supabase():
+    server_id = os.environ.get("SERVER_ID")
+    sb_url = os.environ.get("SUPABASE_URL")
+    sb_key = os.environ.get("SUPABASE_KEY")
+    if server_id and sb_url and sb_key:
+        try:
+            url = f"{sb_url.rstrip('/')}/rest/v1/dim_servers?server_id=eq.{server_id}"
+            headers = {
+                "apikey": sb_key,
+                "Authorization": f"Bearer {sb_key}",
+                "Content-Type": "application/json"
+            }
+            requests.patch(url, headers=headers, json={"status": "offline"}, timeout=4)
+            print(f"[GUARD] Status für Server {server_id} in Supabase erfolgreich auf 'offline' gesetzt.", flush=True)
+        except Exception as e:
+            print(f"[GUARD ERROR] Supabase Offline-Patch fehlgeschlagen: {e}", flush=True)
+
 
 def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
     duration = int(time.time() - start_time)

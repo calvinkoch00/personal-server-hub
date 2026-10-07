@@ -102,20 +102,24 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     target_id = str(target.get("server_id"))
 
     # 1. Server in Supabase finden
+    # Robuste Suche in Supabase: erst nach full_name, sonst nach server_slug
     status_srv, resp_srv = supabase.supabase_client_request(
-        f"dim_servers?full_name=eq.{target['name']}",
+        f"dim_servers?full_name=eq.{target['name']}&status=neq.deleted",
         method="GET"
     )
     db_servers = json.loads(resp_srv) if status_srv == 200 else []
 
-    subdomains_to_reset = set()
-    srv_id = None
+    if not db_servers:
+        # Fallback über Slug (aus 'server-minecraft-skyblock' -> 'skyblock')
+        slug_guess = target['name'].replace("server-minecraft-", "").replace("server-", "")
+        status_srv, resp_srv = supabase.supabase_client_request(
+            f"dim_servers?server_slug=eq.{slug_guess}&status=neq.deleted",
+            method="GET"
+        )
+        db_servers = json.loads(resp_srv) if status_srv == 200 else []
 
     if db_servers:
-        srv_row = db_servers[0]
-        srv_id = srv_row.get("server_id")
-
-        # Status auf offline setzen
+        srv_id = db_servers[0].get("server_id")
         supabase.supabase_client_request(
             f"dim_servers?server_id=eq.{srv_id}",
             method="PATCH",
