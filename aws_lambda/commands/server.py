@@ -105,16 +105,36 @@ def handle_create(data: dict, caller_id: str) -> str:
         )
     return f"❌ {resp.get('error')}"
 
-def handle_delete(data: dict, caller_id: str) -> str:
-    options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
-    payload = {
-        "server_name": options.get("name"),
-        "discord_user_id": caller_id
+def handle_delete(sub_options: dict, caller_id: str) -> dict:
+    server_slug = str(sub_options.get("server") or sub_options.get("name") or "").strip()
+    if not server_slug:
+        return {"content": "❌ Bitte gib einen Servernamen an: `/server delete server: <name>`"}
+
+    return {
+        "content": (
+            f"⚠️ **Achtung:** Möchtest du den Server `{server_slug}` und sein gesamtes Volume "
+            f"wirklich **unwiderruflich löschen**?\nAlle Weltdaten gehen dabei verloren!"
+        ),
+        "components": [
+          {
+            "type": 1,
+            "components": [
+              {
+                "type": 2,
+                "style": 4,  # Danger (Rot)
+                "label": "Ja, endgültig löschen",
+                "custom_id": f"confirm_del:{server_slug}:{caller_id}"
+              },
+              {
+                "type": 2,
+                "style": 2,  # Secondary (Grau)
+                "label": "Abbrechen",
+                "custom_id": f"cancel_del:{caller_id}"
+              }
+            ]
+          }
+        ]
     }
-    status, resp = rest_api.handle_server_delete(payload)
-    if status == 200:
-        return f"🗑️ {resp.get('message')}"
-    return f"❌ {resp.get('error')}"
 
 def handle_log(data: dict) -> str:
     options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}

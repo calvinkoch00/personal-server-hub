@@ -96,18 +96,20 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         if not target:
             return 404, {"error": f"Kein laufender Server mit Namen oder ID '{raw_identifier}' gefunden."}
     else:
-        # Kein Parameter übergeben -> erster aktiver Server
         target = servers[0]
 
     target_ip = target.get("ip")
     target_id = str(target.get("server_id"))
 
-    # 1. Server in Supabase suchen und DNS-Reset auf 0.0.0.0 vorbereiten
+    # 1. Server in Supabase finden
     status_srv, resp_srv = supabase.supabase_client_request(
         f"dim_servers?full_name=eq.{target['name']}",
         method="GET"
     )
     db_servers = json.loads(resp_srv) if status_srv == 200 else []
+
+    subdomains_to_reset = set()
+    srv_id = None
 
     if db_servers:
         srv_row = db_servers[0]
@@ -120,28 +122,38 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
             data={"status": "offline"}
         )
 
-        # Zugeordnete Subdomain ermitteln
-        target_sub = None
+        # 1. Prio: Verknüpfte Records über server_id
         status_dns, resp_dns = supabase.supabase_client_request(
             f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain",
             method="GET"
         )
         if status_dns == 200 and json.loads(resp_dns):
-            target_sub = json.loads(resp_dns)[0].get("subdomain")
+            for d in json.loads(resp_dns):
+                if d.get("subdomain"):
+                    subdomains_to_reset.add(d["subdomain"])
 
-        if not target_sub:
-            slug = srv_row.get("server_slug", "")
-            target_sub = os.environ.get("GODADDY_SUBDOMAIN", "mc") if slug in ["minecraft-default", "default"] else slug
-
-        # DNS-Record sofort auf 0.0.0.0 zurücksetzen
-        if target_sub:
-            dns.update_godaddy_dns("0.0.0.0", subdomain=target_sub, server_id=srv_id)
-    else:
-        supabase.supabase_client_request(
-            f"dim_servers?full_name=eq.{target['name']}",
-            method="PATCH",
-            data={"status": "offline"}
+    # 2. Prio: Alle DNS-Records finden, die aktuell auf die target_ip dieses Servers zeigen
+    if target_ip:
+        status_ip_dns, resp_ip_dns = supabase.supabase_client_request(
+            f"dim_dns_records?record_value=eq.{target_ip}&select=subdomain",
+            method="GET"
         )
+        if status_ip_dns == 200 and json.loads(resp_ip_dns):
+            for d in json.loads(resp_ip_dns):
+                if d.get("subdomain"):
+                    subdomains_to_reset.add(d["subdomain"])
+
+    # Fallback, falls gar nichts gefunden wurde
+    if not subdomains_to_reset:
+        slug = db_servers[0].get("server_slug", "") if db_servers else ""
+        if slug in ["minecraft-default", "default"]:
+            subdomains_to_reset.add(os.environ.get("GODADDY_SUBDOMAIN", "mc"))
+        elif slug:
+            subdomains_to_reset.add(slug)
+
+    # Alle ermittelten Subdomains auf 0.0.0.0 setzen
+    for sub in subdomains_to_reset:
+        dns.update_godaddy_dns("0.0.0.0", subdomain=sub, server_id=srv_id)
 
     graceful_success = False
     if target_ip:
