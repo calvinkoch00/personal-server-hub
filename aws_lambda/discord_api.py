@@ -55,6 +55,8 @@ def handle_interaction(body: dict) -> dict:
         msg = accounts.handle_cash(data, caller_id, caller_name)
     elif command == "addgameaccount":
         msg = accounts.handle_addgameaccount(data, caller_id, caller_data)
+    elif subcommand == "reload-files" or (subcommand == "reload" and "files" in sub_options):
+            msg = server.handle_reload_files(sub_options)
     else:
         msg = f"Unbekannter Befehl: `/{command}`"
 

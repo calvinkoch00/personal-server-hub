@@ -58,6 +58,19 @@
       },
       {
         "type": 1,
+        "name": "reload-files",
+        "description": "Lädt alle Agenten-Dateien auf einem laufenden Server ohne Downtime neu",
+        "options": [
+          {
+            "type": 3,
+            "name": "server",
+            "description": "Servername / Slug (z. B. skyblock)",
+            "required": true
+          }
+        ]
+      },
+      {
+        "type": 1,
         "name": "stop",
         "description": "Stoppt einen laufenden Server",
         "options": [

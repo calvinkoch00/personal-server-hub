@@ -635,6 +635,34 @@ def handle_whitelist_list(payload: dict) -> tuple[int, dict]:
         "entries": rows
     }
 
+def handle_server_reload_files(payload: dict) -> tuple[int, dict]:
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    raw_slug = resolve_server_slug(payload.get("server_name") or payload.get("server") or payload.get("name"), game=game)
+
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_slug=eq.{raw_slug}&status=neq.deleted",
+        method="GET"
+    )
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{raw_slug}' nicht in der Datenbank gefunden."}
+
+    srv = json.loads(resp_s)[0]
+    vm_full_name = srv.get("full_name")
+
+    active_servers = hetzner.list_servers()
+    matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
+
+    if not matched_vm or not matched_vm.get("ip"):
+        return 400, {"error": f"Server '{raw_slug}' läuft aktuell nicht. Dateien werden beim nächsten Start automatisch frisch gezogen."}
+
+    res_agent = agent.reload_remote_files(matched_vm["ip"])
+    if res_agent.get("status") == "ok":
+        return 200, {
+            "message": f"Dateien auf `{srv['display_name']}` erfolgreich neu geladen & Dienste neu gestartet!",
+            "details": res_agent
+        }
+    return 500, {"error": f"Reload fehlgeschlagen: {res_agent.get('error', res_agent.get('message'))}"}
+
 def route_request(path: str, body: dict) -> tuple[int, dict]:
     raw_path = path or "/"
     action = body.get("action")
@@ -675,5 +703,7 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
         return handle_whitelist_remove(body)
     if raw_path.endswith("/whitelist/list") or action == "whitelist_list":
         return handle_whitelist_list(body)
+    if raw_path.endswith("/server/reload-files") or action == "server_reload_files":
+        return handle_server_reload_files(body)
 
     return 404, {"error": f"Endpoint '{raw_path}' nicht gefunden"}

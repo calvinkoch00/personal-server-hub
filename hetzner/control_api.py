@@ -131,6 +131,57 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(404, {"error": "Not found"})
+        # 5. Hot-Reload aller Skripte & Services via systemd
+        if self.path == "/reload-files":
+            if self.headers.get("x-auth-token") != AUTH_SECRET:
+                self._send_json(401, {"error": "Unauthorized"})
+                return
+
+            reload_script = """#!/usr/bin/env bash
+set -euo pipefail
+
+AGENT_DIR="/opt/gameserver-agent"
+RAW_BASE="https://raw.githubusercontent.com/calvinkoch00/personal-server-hub/main/hetzner"
+
+echo "[HOT-RELOAD] Lade Skripte herunter und prüfe Syntax..."
+
+# 1. Alle Skripte nach .new laden & kompilieren (Safety Check)
+for script in lifecycle_guard.py session_tracker.py log_streamer.py control_api.py; do
+    curl -fsSL -H "Cache-Control: no-cache" "$RAW_BASE/$script?ts=$(date +%s)" -o "$AGENT_DIR/$script.new"
+    python3 -m py_compile "$AGENT_DIR/$script.new"
+    mv -f "$AGENT_DIR/$script.new" "$AGENT_DIR/$script"
+done
+
+# 2. bootstrap.sh für zukünftige Restarts aktualisieren
+if [ -d "/opt/bootstrap" ]; then
+    curl -fsSL -H "Cache-Control: no-cache" "$RAW_BASE/bootstrap.sh?ts=$(date +%s)" -o "/opt/bootstrap/bootstrap.sh"
+    chmod +x "/opt/bootstrap/bootstrap.sh"
+fi
+
+echo "[HOT-RELOAD] Starte Systemd-Services nahtlos neu..."
+systemctl restart gameserver-logs.service
+systemctl restart gameserver-tracker.service
+systemctl restart gameserver-guard.service
+
+# 3. Control API verzögert restarten, damit die HTTP-Response an Lambda vorher rausgeht
+(sleep 1 && systemctl restart gameserver-control.service) &
+
+echo "[HOT-RELOAD] Fertig!"
+"""
+            try:
+                script_path = "/tmp/run_agent_reload.sh"
+                with open(script_path, "w", encoding="utf-8") as f:
+                    f.write(reload_script)
+                os.chmod(script_path, 0o755)
+
+                subprocess.Popen(["/bin/bash", script_path])
+                self._send_json(200, {
+                    "status": "ok",
+                    "message": "Hot-Reload eingeleitet. Skripte werden aktualisiert und Dienste neu gestartet."
+                })
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+            return
 
 
 if __name__ == "__main__":

@@ -130,3 +130,13 @@ def handle_log(data: dict) -> str:
     sync_txt = " (Live auf Server umgestellt!)" if resp.get("live_synced") else " (gespeichert für nächsten Serverstart)"
     
     return f"📡 **Live-Logs für `{srv_name}` wurden umgestellt auf: `{cur_mode}`**{sync_txt}"
+
+def handle_reload_files(sub_options: dict) -> str:
+    server_param = sub_options.get("server") or sub_options.get("name")
+    if not server_param:
+        return "❌ Bitte gib einen Servernamen an."
+
+    status, resp = rest_api.handle_server_reload_files({"server_name": server_param})
+    if status == 200:
+        return f"🔄 **Zero-Downtime Reload:** {resp.get('message')}"
+    return f"❌ {resp.get('error')}"

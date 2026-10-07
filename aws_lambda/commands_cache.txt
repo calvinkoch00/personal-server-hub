@@ -2,6 +2,7 @@
 
 • `/start [duration] [log]` — Startet den Standard-Minecraft-Server
 • `/server start [name] [duration] [log]` — Startet einen Server
+• `/server reload-files <server>` — Lädt alle Agenten-Dateien auf einem laufenden Server ohne Downtime neu
 • `/server stop [name]` — Stoppt einen laufenden Server
 • `/server status` — Zeigt alle registrierten Server und deren Status
 • `/server create <name> [game] [subdomain]` — Erstellt ein neues Server-Volume
