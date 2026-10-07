@@ -182,7 +182,7 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
 def handle_server_create(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
     raw_slug = resolve_server_slug(payload.get("server_name") or payload.get("name") or payload.get("server_slug"), game=game)
-    caller_id = payload.get("discord_user_id")
+    caller_id = str(payload.get("discord_user_id") or "")
     server_type = payload.get("server_type", "cpx32")
     custom_subdomain = payload.get("custom_subdomain") or payload.get("subdomain")
 
@@ -216,19 +216,42 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
     created_server = json.loads(resp_sb)[0]
     srv_id = created_server.get("server_id")
 
+    # Alle Accounts des Erstellers für dieses Spiel automatisch als Admin auf die Whitelist setzen
+    creator_accounts_added = []
+    if caller_id and srv_id:
+        status_acc, resp_acc = supabase.supabase_client_request(
+            f"dim_game_accounts?discord_user_id=eq.{caller_id}&game=eq.{game}&select=id,ingame_username",
+            method="GET"
+        )
+        if status_acc == 200:
+            creator_accounts = json.loads(resp_acc)
+            for acc in creator_accounts:
+                acc_id = acc.get("id")
+                uname = acc.get("ingame_username")
+                if acc_id:
+                    wl_payload = {
+                        "server_id": srv_id,
+                        "account_id": acc_id,
+                        "discord_user_id": caller_id,
+                        "role": "server-admin"
+                    }
+                    supabase.supabase_client_request("map_server_whitelist", method="POST", data=wl_payload)
+                    creator_accounts_added.append(uname)
+
     sub_to_use = (custom_subdomain.strip().lower() if custom_subdomain else raw_slug)
     if srv_id and sub_to_use != f"{game}-default":
         dns.update_godaddy_dns("0.0.0.0", subdomain=sub_to_use, server_id=srv_id)
 
-    # Subdomain und Slug garantiert im Response mitsenden
     created_server["subdomain"] = sub_to_use
     created_server["server_slug"] = raw_slug
+    created_server["auto_whitelisted"] = creator_accounts_added
 
     return 201, {
         "message": f"Server '{raw_slug}' erfolgreich erstellt",
         "server": created_server,
         "subdomain": sub_to_use,
-        "server_slug": raw_slug
+        "server_slug": raw_slug,
+        "auto_whitelisted": creator_accounts_added
     }
 
 def handle_server_delete(payload: dict) -> tuple[int, dict]:
