@@ -34,7 +34,7 @@ def handle_interaction(body: dict) -> dict:
         if subcommand == "start":
             msg = server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})
         elif subcommand == "stop":
-            msg = server.handle_stop({"server_id": sub_options.get("name")})
+            msg = server.handle_stop({"name": sub_options.get("name")})
         elif subcommand == "status":
             msg = server.handle_status()
         elif subcommand == "create":

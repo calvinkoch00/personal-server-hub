@@ -49,6 +49,8 @@ def handle_stop(payload: dict | None = None) -> str:
     status, resp = rest_api.handle_stop(payload or {})
     if status == 400:
         return "⚪ Kein laufender Server zum Stoppen vorhanden."
+    if status == 404:
+        return f"⚪ {resp.get('error')}"
     if status != 200:
         return f"❌ Fehler beim Stoppen: {resp.get('error')}"
 

@@ -63,8 +63,43 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     if not servers:
         return 400, {"error": "Kein laufender Server vorhanden"}
 
-    server_id = payload.get("server_id")
-    target = next((s for s in servers if str(s["server_id"]) == str(server_id)), servers[0])
+    raw_identifier = str(
+        payload.get("server_id")
+        or payload.get("server_name")
+        or payload.get("name")
+        or payload.get("server_slug")
+        or ""
+    ).strip().lower()
+
+    target = None
+
+    if raw_identifier:
+        # 1. Direkter Abgleich über numerische Hetzner-ID
+        for s in servers:
+            if str(s.get("server_id")) == raw_identifier:
+                target = s
+                break
+
+        # 2. Falls nicht über ID gefunden: Abgleich über Server-Name / Slug
+        if not target:
+            raw_slug = raw_identifier.replace(" ", "_")
+            # Erlaubt z. B. 'skyblock', 'minecraft-skyblock' oder 'server-minecraft-skyblock'
+            for s in servers:
+                s_name = s.get("name", "").lower()
+                if (
+                    raw_identifier in s_name
+                    or s_name.endswith(f"-{raw_slug}")
+                    or s_name == f"server-minecraft-{raw_slug}"
+                ):
+                    target = s
+                    break
+
+        if not target:
+            return 404, {"error": f"Kein laufender Server mit Namen oder ID '{raw_identifier}' gefunden."}
+    else:
+        # Kein Parameter übergeben -> erster aktiver Server
+        target = servers[0]
+
     target_ip = target.get("ip")
     target_id = str(target.get("server_id"))
 
