@@ -56,7 +56,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     graceful_success = False
     if target_ip:
         try:
-            # Sendet das Signal an den Agenten (dieser setzt /tmp/force_shutdown)
             res = agent.stop_remote_server(target_ip)
             if res.get("status") == "stopping":
                 graceful_success = True
@@ -64,19 +63,12 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
             print(f"[REST_API] Agent auf {target_ip} nicht erreichbar: {e}")
 
     if graceful_success:
-        # Der Guard auf der VM kümmert sich nun um:
-        # 1. Tracker stoppen & Sessions flushen
-        # 2. Server-Run in Supabase schließen
-        # 3. Docker sauber beenden & Chunks sichern
-        # 4. Shutdown-Logs an Discord schicken
-        # 5. Sich selbst bei Hetzner löschen
         return 200, {
             "message": f"Shutdown für {target['name']} eingeleitet",
             "target": target,
             "mode": "graceful"
         }
     else:
-        # Nur wenn der Agent offline ist, löschen wir die VM direkt per Hetzner API
         delete_res = hetzner.delete_server(target_id)
         return 200, {
             "message": f"Server {target['name']} direkt via Hetzner-API gelöscht",
@@ -118,28 +110,44 @@ def handle_account(payload: dict) -> tuple[int, dict]:
         return 200, {"mode": "single", "user": rows[0] if rows else None}
     return status, {"error": f"Fehler beim Abrufen des Kontos ({status}): {resp_text}"}
 
+def handle_exchange_rate(payload: dict) -> tuple[int, dict]:
+    base = payload.get("base") or payload.get("from") or "CHF"
+    target = payload.get("target") or payload.get("to") or "EUR"
+    rate, source, rate_id = fx.get_exchange_rate(base_currency=base, target_currency=target)
+    return 200, {
+        "base_currency": base.upper(),
+        "target_currency": target.upper(),
+        "rate": rate,
+        "source": source,
+        "rate_id": rate_id
+    }
+
 def handle_cash(payload: dict) -> tuple[int, dict]:
     target_uid = payload.get("target_uid")
     amount_orig = float(payload.get("amount", 0.0))
     currency = payload.get("currency", "CHF").upper()
+    target_currency = payload.get("target_currency", "EUR").upper()
     note = payload.get("note", "Einzahlung")
     caller_name = payload.get("created_by", "Admin")
 
-    if currency == "CHF":
-        fx_rate, fx_source = fx.get_current_chf_to_eur_rate()
-        fx_text = f" *(Wechselkurs 1 CHF = {fx_rate:.4f} EUR [{fx_source}])* "
+    fx_rate, fx_source, rate_id = fx.get_exchange_rate(
+        base_currency=currency,
+        target_currency=target_currency
+    )
+
+    if currency != target_currency:
+        fx_text = f" *(Wechselkurs 1 {currency} = {fx_rate:.4f} {target_currency} [{fx_source}])* "
     else:
-        fx_rate = 1.0000
-        fx_source = "direct"
         fx_text = ""
 
-    amount_eur = round(amount_orig * fx_rate, 2)
+    amount_target = round(amount_orig * fx_rate, 2)
     payment_data = {
         "discord_user_id": target_uid,
         "amount_original": amount_orig,
         "currency": currency,
         "exchange_rate": fx_rate,
-        "amount_eur": amount_eur,
+        "exchange_rate_id": rate_id,
+        "amount_eur": amount_target,
         "note": note,
         "created_by": caller_name
     }
@@ -210,6 +218,8 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
         return handle_account(body)
     if raw_path.endswith("/cash"):
         return handle_cash(body)
+    if raw_path.endswith("/exchange-rate") or action == "exchange_rate":
+        return handle_exchange_rate(body)
     if raw_path.endswith("/addgameaccount") or action == "addgameaccount":
         return handle_addgameaccount(body)
 

@@ -86,13 +86,12 @@ def handle_cash(data: dict, caller_id: str, caller_name: str) -> str:
         return f"❌ Empfänger `{target_user_raw}` konnte nicht in der Datenbank gefunden werden."
     if not amount_raw or float(amount_raw) <= 0:
         return "❌ Bitte gib einen gültigen Betrag größer als 0 an."
-    if currency not in ["CHF", "EUR"]:
-        return "❌ Bitte als Währung entweder `CHF` oder `EUR` angeben."
 
     status, resp = rest_api.handle_cash({
         "target_uid": target_uid,
         "amount": amount_raw,
         "currency": currency,
+        "target_currency": "EUR",
         "note": note,
         "created_by": caller_name
     })
