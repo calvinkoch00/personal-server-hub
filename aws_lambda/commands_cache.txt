@@ -1,11 +1,19 @@
 📖 **Verfügbare Server-Befehle:**
 
-• `/start [game] [duration] [log]` — Startet den Server (Logs: none, game, all)
+• `/start [duration] [log]` — Startet den Standard-Minecraft-Server
+• `/server start [name] [duration] [log]` — Startet einen Server
+• `/server stop [name]` — Stoppt einen laufenden Server
+• `/server status` — Zeigt alle registrierten Server und deren Status
+• `/server create <name> [game] [subdomain]` — Erstellt ein neues Server-Volume
+• `/server delete <name>` — Löscht einen Server und dessen Volume unwiderruflich
+• `/whitelist add <username> [server] [role]` — Fügt einen Spieler zur Whitelist hinzu
+• `/whitelist remove <username> [server]` — Entfernt einen Spieler von der Whitelist
+• `/whitelist list [server]` — Zeigt alle gewhitelisteten Spieler eines Servers
 • `/status` — Zeigt alle aktiven Server samt IP an
-• `/log <mode>` — Schaltet Logs um (`all`, `game`, `off`)
-• `/stop` — Stoppt und sichert den laufenden Server
-• `/costs [timeframe] [user]` — Zeigt Abrechnung & Spielzeiten
-• `/account [user]` — Zeigt Guthaben / Kontostand (`me`, `all`, `@user`)
-• `/cash add <user> <amount> [currency] [note]` — *(Admin)* Guthaben aufladen
-• `/addgameaccount <game> <username>` — Verknüpft dein Profil
-• `/help` — Zeigt diese Übersicht an
+• `/log <mode>` — Schaltet Live-Server-Logs im laufenden Betrieb um
+• `/stop` — Stoppt und löscht den aktuell laufenden Server
+• `/costs [timeframe] [user]` — Zeigt die Kosten und Spielzeiten an
+• `/account [user]` — Zeigt das Guthaben bzw. den Kontostand an
+• `/cash add <user> <amount> [currency] [note]` — Fügt einem Nutzer Guthaben hinzu (z. B. nach Twint / Revolut)
+• `/addgameaccount <game> <username>` — Verknüpft deinen Ingame-Namen mit deinem Discord-Profil
+• `/help` — Zeigt alle Befehle und Bedienungshinweise an
