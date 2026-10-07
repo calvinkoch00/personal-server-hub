@@ -18,8 +18,9 @@ def json_response(status_code: int, body: dict) -> dict:
     }
 
 def lambda_handler(event, context):
-    # 0. Asynchroner Hintergrund-Job (Self-Invocation)
+    # 0. Asynchroner Worker-Eingang
     if event.get("async_worker"):
+        print("[ASYNC WORKER] Starte Hintergrund-Job...")
         discord_api.execute_async_command(
             command_payload=event.get("command_payload"),
             token=event.get("token"),
@@ -37,17 +38,28 @@ def lambda_handler(event, context):
     if http_method == "OPTIONS":
         return json_response(200, {"message": "CORS OK"})
 
-    # 1. Discord Webhook Entrypoint (Signaturprüfung & Routing)
-    if "x-signature-ed25519" in headers or "X-Signature-Ed25519" in headers:
+    # Header-Keys vereinheitlichen (lowercase)
+    norm_headers = {k.lower(): v for k, v in headers.items()}
+
+    # 1. Discord Webhook Entrypoint
+    if "x-signature-ed25519" in norm_headers:
         if not verify_discord_signature(headers, raw_body):
+            print("[AUTH ERROR] Discord Signatur ungültig")
             return json_response(401, {"error": "Invalid Discord Signature"})
         try:
-            interaction_res = discord_api.handle_interaction(json.loads(raw_body), context)
-            return json_response(interaction_res["statusCode"], interaction_res["body"])
+            body_dict = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+            interaction_res = discord_api.handle_interaction(body_dict, context)
+            
+            res_body = interaction_res.get("body", {})
+            if isinstance(res_body, str):
+                res_body = json.loads(res_body)
+                
+            return json_response(interaction_res.get("statusCode", 200), res_body)
         except Exception as e:
+            print(f"[DISCORD ROUTING ERROR] {e}")
             return json_response(500, {"error": str(e)})
 
-    # 2. REST API Entrypoint (Token Auth erforderlich)
+    # 2. REST API Entrypoint
     if not is_authorized(headers):
         return json_response(401, {"error": "Unauthorized"})
 
@@ -63,4 +75,5 @@ def lambda_handler(event, context):
         status_code, resp_body = rest_api.route_request(raw_path, body)
         return json_response(status_code, resp_body)
     except Exception as e:
+        print(f"[REST ROUTING ERROR] {e}")
         return json_response(500, {"error": str(e)})
