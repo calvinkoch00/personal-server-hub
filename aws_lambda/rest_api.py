@@ -175,7 +175,16 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
     if srv_id and sub_to_use != f"{game}-default":
         dns.update_godaddy_dns("0.0.0.0", subdomain=sub_to_use, server_id=srv_id)
 
-    return 201, {"message": f"Server '{raw_slug}' erfolgreich erstellt", "server": created_server}
+    # Subdomain und Slug garantiert im Response mitsenden
+    created_server["subdomain"] = sub_to_use
+    created_server["server_slug"] = raw_slug
+
+    return 201, {
+        "message": f"Server '{raw_slug}' erfolgreich erstellt",
+        "server": created_server,
+        "subdomain": sub_to_use,
+        "server_slug": raw_slug
+    }
 
 def handle_server_delete(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
