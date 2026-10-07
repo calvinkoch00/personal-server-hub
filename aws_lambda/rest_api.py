@@ -143,8 +143,14 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
                 if d.get("subdomain"):
                     subdomains_to_reset.add(d["subdomain"])
 
-    # 2. Prio für DNS: Alle DNS-Records finden, die aktuell auf die target_ip zeigen
+    # 2. Prio für DNS: Direkt bei GoDaddy nachsehen, welche Records real auf target_ip zeigen
     if target_ip:
+        live_matched = dns.find_subdomains_by_ip(target_ip)
+        for sub in live_matched:
+            subdomains_to_reset.add(sub)
+
+    # 3. Prio für DNS: Alle Records in Supabase finden, die auf target_ip verweisen
+    if target_ip and not subdomains_to_reset:
         status_ip_dns, resp_ip_dns = supabase.supabase_client_request(
             f"dim_dns_records?record_value=eq.{target_ip}&select=subdomain",
             method="GET"
@@ -162,9 +168,15 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         elif slug:
             subdomains_to_reset.add(slug)
 
-    # Alle ermittelten Subdomains sauber auf 0.0.0.0 zurücksetzen
+    # Alle ermittelten Subdomains zuverlässig auf 0.0.0.0 setzen
     for sub in subdomains_to_reset:
         dns.update_godaddy_dns("0.0.0.0", subdomain=sub, server_id=srv_id)
+
+    # Sofortiger Sync aller GoDaddy Records nach Supabase
+    try:
+        dns.sync_all_dns_from_godaddy()
+    except Exception as e:
+        print(f"[REST_API WARNING] DNS-Sync nach Stop fehlgeschlagen: {e}")
 
     graceful_success = False
     if target_ip:

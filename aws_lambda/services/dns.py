@@ -91,6 +91,28 @@ def delete_godaddy_dns(subdomain: str) -> bool:
     )
     return True
 
+def find_subdomains_by_ip(target_ip: str) -> list[str]:
+    """Sucht direkt bei GoDaddy nach Subdomains, deren A-Record auf target_ip zeigt."""
+    if not target_ip or target_ip in ["0.0.0.0", "127.0.0.1"]:
+        return []
+
+    headers = _get_headers()
+    url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records/A"
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            records = json.loads(resp.read().decode("utf-8"))
+            matched = []
+            for r in records:
+                if str(r.get("data", "")).strip() == str(target_ip).strip():
+                    name = r.get("name")
+                    if name and name != "@":
+                        matched.append(name)
+            return matched
+    except Exception as e:
+        print(f"[DNS LOOKUP ERROR] Konnte GoDaddy Records nicht prüfen: {e}")
+        return []
+
 def sync_all_dns_from_godaddy() -> dict:
     """Holt alle Records von GoDaddy und speichert sie gespiegelt in dim_dns_records."""
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:
