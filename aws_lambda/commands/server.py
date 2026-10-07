@@ -95,11 +95,13 @@ def handle_create(data: dict, caller_id: str) -> str:
     status, resp = rest_api.handle_server_create(payload)
     if status == 201:
         srv = resp.get("server", {})
+        slug = srv.get("server_slug") or resp.get("server_slug") or options.get("name")
+        sub = srv.get("subdomain") or resp.get("subdomain") or slug
         return (
-            f"✅ **Server `{srv.get('display_name')}` erfolgreich erstellt!**\n"
+            f"✅ **Server `{srv.get('display_name', f'minecraft-{slug}')}` erfolgreich erstellt!**\n"
             f"• Hetzner Volume: `{srv.get('hetzner_volume_id')}` (20 GB)\n"
-            f"• Adresse: `{srv.get('subdomain')}.calvinkoch.ch`\n"
-            f"• Status: `offline` (kann jetzt per `/server start name: {srv.get('server_name')}` gestartet werden)"
+            f"• Adresse: `{sub}.calvinkoch.ch`\n"
+            f"• Status: `offline` (kann jetzt per `/server start name: {slug}` gestartet werden)"
         )
     return f"❌ {resp.get('error')}"
 
