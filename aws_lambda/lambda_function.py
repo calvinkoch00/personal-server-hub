@@ -1,7 +1,10 @@
 import json
+import boto3
 from services.auth import is_authorized, verify_discord_signature
 import discord_api
 import rest_api
+
+lambda_client = boto3.client("lambda")
 
 def json_response(status_code: int, body: dict) -> dict:
     return {
@@ -15,6 +18,15 @@ def json_response(status_code: int, body: dict) -> dict:
     }
 
 def lambda_handler(event, context):
+    # 0. Asynchroner Hintergrund-Job (Self-Invocation)
+    if event.get("async_worker"):
+        discord_api.execute_async_command(
+            command_payload=event.get("command_payload"),
+            token=event.get("token"),
+            app_id=event.get("app_id")
+        )
+        return json_response(200, {"status": "done"})
+
     headers = event.get("headers", {}) or {}
     raw_body = event.get("body", "") or ""
 
@@ -30,7 +42,7 @@ def lambda_handler(event, context):
         if not verify_discord_signature(headers, raw_body):
             return json_response(401, {"error": "Invalid Discord Signature"})
         try:
-            interaction_res = discord_api.handle_interaction(json.loads(raw_body))
+            interaction_res = discord_api.handle_interaction(json.loads(raw_body), context)
             return json_response(interaction_res["statusCode"], interaction_res["body"])
         except Exception as e:
             return json_response(500, {"error": str(e)})

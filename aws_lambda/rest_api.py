@@ -172,12 +172,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     for sub in subdomains_to_reset:
         dns.update_godaddy_dns("0.0.0.0", subdomain=sub, server_id=srv_id)
 
-    # Sofortiger Sync aller GoDaddy Records nach Supabase
-    try:
-        dns.sync_all_dns_from_godaddy()
-    except Exception as e:
-        print(f"[REST_API WARNING] DNS-Sync nach Stop fehlgeschlagen: {e}")
-
     graceful_success = False
     if target_ip:
         try:
