@@ -6,7 +6,7 @@ from services import hetzner, agent, supabase, fx, dns, mojang
 
 def handle_start(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    server_name = str(payload.get("server_name") or payload.get("name") or "default").strip().lower().replace(" ", "_")
+    server_slug = str(payload.get("server_name") or payload.get("name") or payload.get("server_slug") or "default").strip().lower().replace(" ", "_")
     duration_raw = str(payload.get("duration", "5m")).strip().lower()
     server_type = payload.get("server_type")
     log_mode = str(payload.get("log", payload.get("logging", "none"))).strip().lower()
@@ -31,7 +31,7 @@ def handle_start(payload: dict) -> tuple[int, dict]:
     try:
         result = hetzner.create_server(
             game=game,
-            server_name=server_name,
+            server_name=server_slug,
             seconds=seconds,
             readable=readable,
             server_type=server_type,
@@ -47,7 +47,7 @@ def handle_start(payload: dict) -> tuple[int, dict]:
         return 500, {"error": f"Serverstart fehlgeschlagen: {str(e)}"}
 
 def handle_servers() -> tuple[int, dict]:
-    status, resp = supabase.supabase_client_request("dim_servers?status=neq.deleted&order=game.asc,server_name.asc", method="GET")
+    status, resp = supabase.supabase_client_request("dim_servers?status=neq.deleted&order=game.asc,server_slug.asc", method="GET")
     if status == 200:
         return 200, {"servers": json.loads(resp)}
     return 200, {"data": hetzner.list_servers()}
@@ -71,6 +71,7 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         except Exception as e:
             print(f"[REST_API] Agent auf {target_ip} nicht erreichbar: {e}")
 
+    # dim_servers status auf offline setzen
     supabase.supabase_client_request(
         f"dim_servers?full_name=eq.{target['name']}",
         method="PATCH",
@@ -94,21 +95,19 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
 
 def handle_server_create(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    raw_name = str(payload.get("server_name") or payload.get("name", "")).strip().lower().replace(" ", "_")
+    raw_slug = str(payload.get("server_name") or payload.get("name") or payload.get("server_slug") or "").strip().lower().replace(" ", "_")
     caller_id = payload.get("discord_user_id")
     server_type = payload.get("server_type", "cpx32")
-    custom_subdomain = payload.get("custom_subdomain")
-    if custom_subdomain:
-        custom_subdomain = custom_subdomain.strip().lower()
+    custom_subdomain = payload.get("custom_subdomain") or payload.get("subdomain")
 
-    if not raw_name or not re.match(r"^[a-z0-9_-]+$", raw_name):
+    if not raw_slug or not re.match(r"^[a-z0-9_-]+$", raw_slug):
         return 400, {"error": "Servername darf nur Kleinbuchstaben, Zahlen, - und _ enthalten"}
 
-    status_c, resp_c = supabase.supabase_client_request(f"dim_servers?server_name=eq.{raw_name}&status=neq.deleted", method="GET")
+    status_c, resp_c = supabase.supabase_client_request(f"dim_servers?server_slug=eq.{raw_slug}&status=neq.deleted", method="GET")
     if status_c == 200 and json.loads(resp_c):
-        return 400, {"error": f"Ein aktiver Server mit dem Namen '{raw_name}' existiert bereits."}
+        return 400, {"error": f"Ein aktiver Server mit dem Namen '{raw_slug}' existiert bereits."}
 
-    volume_name = f"vol-{game}-{raw_name}"[:32]
+    volume_name = f"vol-{game}-{raw_slug}"[:32]
     vol = hetzner.create_volume(name=volume_name, size_gb=20, location="nbg1")
     volume_id = vol.get("id")
     if not volume_id:
@@ -116,8 +115,8 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
 
     server_entry = {
         "game": game,
-        "server_name": raw_name,
-        "custom_subdomain": custom_subdomain,
+        "server_slug": raw_slug,
+        "display_name": f"{game}-{raw_slug}",
         "hetzner_volume_id": volume_id,
         "hetzner_server_type": server_type,
         "status": "offline",
@@ -128,27 +127,38 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
         hetzner.delete_volume(volume_id)
         return status_sb, {"error": f"Fehler in dim_servers: {resp_sb}"}
 
-    return 201, {"message": f"Server '{raw_name}' erfolgreich erstellt", "server": json.loads(resp_sb)[0]}
+    created_server = json.loads(resp_sb)[0]
+    srv_id = created_server.get("server_id")
+
+    sub_to_use = (custom_subdomain.strip().lower() if custom_subdomain else raw_slug)
+    if srv_id and sub_to_use != "default":
+        dns.update_godaddy_dns("0.0.0.0", subdomain=sub_to_use, server_id=srv_id)
+
+    return 201, {"message": f"Server '{raw_slug}' erfolgreich erstellt", "server": created_server}
 
 def handle_server_delete(payload: dict) -> tuple[int, dict]:
-    raw_name = str(payload.get("server_name") or payload.get("name", "")).strip().lower()
+    raw_slug = str(payload.get("server_name") or payload.get("name") or payload.get("server_slug") or "").strip().lower()
     caller_id = payload.get("discord_user_id")
 
-    status_s, resp_s = supabase.supabase_client_request(f"dim_servers?server_name=eq.{raw_name}&status=neq.deleted", method="GET")
+    status_s, resp_s = supabase.supabase_client_request(f"dim_servers?server_slug=eq.{raw_slug}&status=neq.deleted", method="GET")
     if status_s != 200 or not json.loads(resp_s):
-        return 404, {"error": f"Server '{raw_name}' nicht gefunden"}
+        return 404, {"error": f"Server '{raw_slug}' nicht gefunden"}
 
     srv = json.loads(resp_s)[0]
 
-    if srv["server_name"] == "default":
+    if srv["server_slug"] == "default":
         status_u, resp_u = supabase.supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
         user_role = json.loads(resp_u)[0].get("role") if status_u == 200 and json.loads(resp_u) else "user"
         if user_role != "superadmin":
             return 403, {"error": "Nur der Superadmin darf den Default-Server löschen."}
 
     hetzner.delete_volume(srv["hetzner_volume_id"])
-    if srv.get("subdomain"):
-        dns.delete_godaddy_dns(srv["subdomain"])
+
+    status_dns, resp_dns = supabase.supabase_client_request(f"dim_dns_records?server_id=eq.{srv['server_id']}&select=subdomain", method="GET")
+    if status_dns == 200:
+        for d in json.loads(resp_dns):
+            if d.get("subdomain"):
+                dns.delete_godaddy_dns(d["subdomain"])
 
     now_iso = datetime.now(timezone.utc).isoformat()
     supabase.supabase_client_request(
@@ -321,12 +331,8 @@ def handle_dns_records(payload: dict) -> tuple[int, dict]:
         return 200, {"records": json.loads(resp)}
     return status, {"error": f"Fehler beim Laden der DNS-Records: {resp}"}
 
-# ==========================================
-# Feature 4: Hybrid Whitelist Handler
-# ==========================================
-
 def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
-    server_name = str(payload.get("server_name") or "default").strip().lower().replace(" ", "_")
+    server_slug = str(payload.get("server_name") or payload.get("server_slug") or "default").strip().lower().replace(" ", "_")
     game = str(payload.get("game", "minecraft")).strip().lower()
     raw_user = str(payload.get("username", "")).strip()
     caller_id = str(payload.get("discord_user_id", ""))
@@ -336,10 +342,10 @@ def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
         return 400, {"error": "Parameter 'username' fehlt"}
 
     status_s, resp_s = supabase.supabase_client_request(
-        f"dim_servers?game=eq.{game}&server_name=eq.{server_name}&status=neq.deleted", method="GET"
+        f"dim_servers?game=eq.{game}&server_slug=eq.{server_slug}&status=neq.deleted", method="GET"
     )
     if status_s != 200 or not json.loads(resp_s):
-        return 404, {"error": f"Server '{server_name}' nicht gefunden"}
+        return 404, {"error": f"Server '{server_slug}' nicht gefunden"}
     srv = json.loads(resp_s)[0]
     srv_id = srv["server_id"]
     vm_full_name = srv.get("full_name")
@@ -415,7 +421,7 @@ def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
     }
 
 def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
-    server_name = str(payload.get("server_name") or "default").strip().lower().replace(" ", "_")
+    server_slug = str(payload.get("server_name") or payload.get("server_slug") or "default").strip().lower().replace(" ", "_")
     game = str(payload.get("game", "minecraft")).strip().lower()
     raw_user = str(payload.get("username", "")).strip()
     caller_id = str(payload.get("discord_user_id", ""))
@@ -424,10 +430,10 @@ def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
         return 400, {"error": "Parameter 'username' fehlt"}
 
     status_s, resp_s = supabase.supabase_client_request(
-        f"dim_servers?game=eq.{game}&server_name=eq.{server_name}&status=neq.deleted", method="GET"
+        f"dim_servers?game=eq.{game}&server_slug=eq.{server_slug}&status=neq.deleted", method="GET"
     )
     if status_s != 200 or not json.loads(resp_s):
-        return 404, {"error": f"Server '{server_name}' nicht gefunden"}
+        return 404, {"error": f"Server '{server_slug}' nicht gefunden"}
     srv = json.loads(resp_s)[0]
     srv_id = srv["server_id"]
     vm_full_name = srv.get("full_name")
@@ -483,14 +489,14 @@ def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
     }
 
 def handle_whitelist_list(payload: dict) -> tuple[int, dict]:
-    server_name = str(payload.get("server_name") or "default").strip().lower().replace(" ", "_")
+    server_slug = str(payload.get("server_name") or payload.get("server_slug") or "default").strip().lower().replace(" ", "_")
     game = str(payload.get("game", "minecraft")).strip().lower()
 
     status_s, resp_s = supabase.supabase_client_request(
-        f"dim_servers?game=eq.{game}&server_name=eq.{server_name}&status=neq.deleted", method="GET"
+        f"dim_servers?game=eq.{game}&server_slug=eq.{server_slug}&status=neq.deleted", method="GET"
     )
     if status_s != 200 or not json.loads(resp_s):
-        return 404, {"error": f"Server '{server_name}' nicht gefunden"}
+        return 404, {"error": f"Server '{server_slug}' nicht gefunden"}
     srv = json.loads(resp_s)[0]
 
     status_w, resp_w = supabase.supabase_client_request(
@@ -508,7 +514,6 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
     raw_path = path or "/"
     action = body.get("action")
 
-    # Multi-Server Endpunkte
     if raw_path.endswith("/server/start") or raw_path.endswith("/start") or action == "start":
         return handle_start(body)
     if raw_path.endswith("/server/stop") or raw_path.endswith("/stop") or action == "stop":
@@ -520,7 +525,6 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
     if raw_path.endswith("/servers") or action == "list":
         return handle_servers()
 
-    # Log & Finanzen
     if raw_path.endswith("/log") or action == "log":
         return handle_log(body)
     if raw_path.endswith("/costs"):
@@ -532,17 +536,14 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
     if raw_path.endswith("/exchange-rate") or action == "exchange_rate":
         return handle_exchange_rate(body)
 
-    # Game Accounts
     if raw_path.endswith("/addgameaccount") or action == "addgameaccount":
         return handle_addgameaccount(body)
 
-    # DNS
     if raw_path.endswith("/dns/sync") or action == "dns_sync":
         return handle_dns_sync(body)
     if raw_path.endswith("/dns/records") or action == "dns_records":
         return handle_dns_records(body)
 
-    # Whitelist
     if raw_path.endswith("/whitelist/add") or action == "whitelist_add":
         return handle_whitelist_add(body)
     if raw_path.endswith("/whitelist/remove") or action == "whitelist_remove":

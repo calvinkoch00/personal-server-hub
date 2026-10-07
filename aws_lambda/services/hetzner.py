@@ -48,22 +48,26 @@ def create_server(
     enable_logging: str = "none"
 ) -> dict:
     clean_game = game.strip().lower()
-    clean_name = server_name.strip().lower().replace(" ", "_")
+    clean_slug = server_name.strip().lower().replace(" ", "_")
 
-    # 1. Server-Metadaten aus dim_servers abfragen
     status_sb, resp_sb = supabase_client_request(
-        f"dim_servers?game=eq.{clean_game}&server_name=eq.{clean_name}&status=neq.deleted&select=*",
+        f"dim_servers?game=eq.{clean_game}&server_slug=eq.{clean_slug}&status=neq.deleted&select=*",
         method="GET"
     )
     db_server = json.loads(resp_sb)[0] if status_sb == 200 and json.loads(resp_sb) else None
 
-    # Fallback auf bestehende Konfiguration falls nicht in DB
     game_cfg = get_game_config(clean_game)
     volume_id = int(db_server["hetzner_volume_id"]) if db_server else game_cfg.get("volume_id", 107045799)
     game_port = int(db_server["game_port"]) if db_server else game_cfg.get("port", 25565)
     resolved_type = server_type or (db_server.get("hetzner_server_type") if db_server else None) or game_cfg.get("default_type", "cpx32")
-    subdomain = db_server.get("subdomain") if db_server else os.environ.get("GODADDY_SUBDOMAIN", "mc")
     db_server_id = db_server.get("server_id") if db_server else None
+
+    # Subdomain ermitteln (aus verknüpftem dim_dns_records oder Fallback auf mc)
+    subdomain = os.environ.get("GODADDY_SUBDOMAIN", "mc")
+    if db_server_id:
+        status_dns, resp_dns = supabase_client_request(f"dim_dns_records?server_id=eq.{db_server_id}&select=subdomain", method="GET")
+        if status_dns == 200 and json.loads(resp_dns):
+            subdomain = json.loads(resp_dns)[0].get("subdomain") or subdomain
 
     user_data = get_stage1_bootloader(
         volume_id=volume_id,
@@ -72,7 +76,7 @@ def create_server(
         enable_logging=enable_logging
     )
 
-    vm_name = db_server.get("full_name") if db_server else f"{clean_game}-ondemand"
+    vm_name = db_server.get("full_name") if db_server else f"server-{clean_game}-{clean_slug}"
     payload = {
         "name": vm_name,
         "server_type": resolved_type,
@@ -80,17 +84,15 @@ def create_server(
         "location": os.environ.get("HETZNER_LOCATION", "nbg1"),
         "user_data": user_data,
         "volumes": [volume_id],
-        "labels": {"game": clean_game, "server_name": clean_name}
+        "labels": {"game": clean_game, "server_slug": clean_slug}
     }
 
     resp = _request("/servers", method="POST", data=payload)
     server_data = resp["server"]
     server_ip = server_data["public_net"]["ipv4"]["ip"]
 
-    # DNS aktualisieren mit Subdomain
     update_godaddy_dns(ip=server_ip, subdomain=subdomain, server_id=db_server_id)
 
-    # In Supabase protokollieren & Status auf online setzen
     log_server_start_to_supabase(server_data["id"], clean_game, resolved_type, server_id=db_server_id)
     if db_server_id:
         supabase_client_request(f"dim_servers?server_id=eq.{db_server_id}", method="PATCH", data={"status": "online"})
@@ -102,7 +104,7 @@ def create_server(
         "db_server_id": db_server_id,
         "name": server_data["name"],
         "game": clean_game,
-        "server_name": clean_name,
+        "server_slug": clean_slug,
         "ip": server_ip,
         "domain": f"{subdomain}.{domain}",
         "lifetime_readable": readable,

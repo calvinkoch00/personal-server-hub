@@ -3,7 +3,6 @@ from unittest.mock import patch, MagicMock
 from services import hetzner
 import rest_api
 
-
 @patch("services.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")
 @patch("services.hetzner.update_godaddy_dns")
@@ -13,11 +12,12 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
         "hetzner_volume_id": 99999999,
         "hetzner_server_type": "cpx32",
         "game_port": 25565,
-        "subdomain": "mc",
         "full_name": "server-minecraft-default"
     }]
+    dns_meta = [{"subdomain": "mc"}]
     mock_sb.side_effect = [
         (200, json.dumps(server_meta)),  # Select dim_servers
+        (200, json.dumps(dns_meta)),     # Select dim_dns_records
         (200, '{"status": "ok"}')        # PATCH status online
     ]
 
@@ -44,7 +44,6 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
         assert mock_dns.called
         assert mock_log.called
 
-
 @patch("services.hetzner.create_volume")
 @patch("services.supabase.supabase_client_request")
 def test_handle_server_create(mock_sb, mock_vol):
@@ -53,7 +52,7 @@ def test_handle_server_create(mock_sb, mock_vol):
         (200, "[]"),  # Name Check (frei)
         (201, json.dumps([{
             "server_id": "new-srv-id",
-            "server_name": "skyblock",
+            "server_slug": "skyblock",
             "display_name": "minecraft-skyblock"
         }]))
     ]
@@ -65,9 +64,8 @@ def test_handle_server_create(mock_sb, mock_vol):
     })
 
     assert status == 201
-    assert body["server"]["server_name"] == "skyblock"
+    assert body["server"]["server_slug"] == "skyblock"
     assert mock_vol.called
-
 
 @patch("services.supabase.supabase_client_request")
 def test_handle_server_create_invalid_name(mock_sb):
