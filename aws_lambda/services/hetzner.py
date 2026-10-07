@@ -62,12 +62,23 @@ def create_server(
     resolved_type = server_type or (db_server.get("hetzner_server_type") if db_server else None) or game_cfg.get("default_type", "cpx32")
     db_server_id = db_server.get("server_id") if db_server else None
 
-    # Subdomain ermitteln (aus verknüpftem dim_dns_records oder Fallback auf mc)
-    subdomain = os.environ.get("GODADDY_SUBDOMAIN", "mc")
+    # Subdomain ermitteln:
+    # 1. Prio: Verknüpfter Record aus dim_dns_records für diesen Server
+    # 2. Prio: Wenn es der Default-Server ist -> GODADDY_SUBDOMAIN ("mc")
+    # 3. Prio: Fallback -> clean_slug
+    subdomain = None
     if db_server_id:
-        status_dns, resp_dns = supabase_client_request(f"dim_dns_records?server_id=eq.{db_server_id}&select=subdomain", method="GET")
+        status_dns, resp_dns = supabase_client_request(
+            f"dim_dns_records?server_id=eq.{db_server_id}&select=subdomain", method="GET"
+        )
         if status_dns == 200 and json.loads(resp_dns):
-            subdomain = json.loads(resp_dns)[0].get("subdomain") or subdomain
+            subdomain = json.loads(resp_dns)[0].get("subdomain")
+
+    if not subdomain:
+        if clean_slug in ["minecraft-default", "default"]:
+            subdomain = os.environ.get("GODADDY_SUBDOMAIN", "mc")
+        else:
+            subdomain = clean_slug
 
     user_data = get_stage1_bootloader(
         volume_id=volume_id,
@@ -91,6 +102,7 @@ def create_server(
     server_data = resp["server"]
     server_ip = server_data["public_net"]["ipv4"]["ip"]
 
+    # Nur die ermittelte Subdomain für DIESEN Server auf die zugewiesene Hetzner-IP setzen
     update_godaddy_dns(ip=server_ip, subdomain=subdomain, server_id=db_server_id)
 
     log_server_start_to_supabase(server_data["id"], clean_game, resolved_type, server_id=db_server_id)

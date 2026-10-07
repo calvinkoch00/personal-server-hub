@@ -76,3 +76,25 @@ def test_handle_server_create_invalid_name(mock_sb):
     })
     assert status == 400
     assert "nur Kleinbuchstaben" in body["error"]
+
+@patch("services.dns.update_godaddy_dns")
+@patch("services.supabase.supabase_client_request")
+@patch("services.agent.stop_remote_server")
+@patch("services.hetzner.list_servers")
+def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns):
+    mock_list.return_value = [{
+        "server_id": 999,
+        "name": "server-minecraft-skyblock",
+        "ip": "2.28.203.66"
+    }]
+    mock_agent.return_value = {"status": "stopping"}
+    mock_sb.side_effect = [
+        (200, json.dumps([{"server_id": "srv-sky", "server_slug": "skyblock"}])), # Select dim_servers
+        (200, '{"status": "ok"}'), # Patch dim_servers offline
+        (200, json.dumps([{"subdomain": "sky"}])) # Select dim_dns_records
+    ]
+
+    status, body = rest_api.handle_stop({"name": "skyblock"})
+    assert status == 200
+    assert body["mode"] == "graceful"
+    mock_dns.assert_called_with("0.0.0.0", subdomain="sky", server_id="srv-sky")

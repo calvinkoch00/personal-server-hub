@@ -83,7 +83,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         # 2. Falls nicht über ID gefunden: Abgleich über Server-Name / Slug
         if not target:
             raw_slug = raw_identifier.replace(" ", "_")
-            # Erlaubt z. B. 'skyblock', 'minecraft-skyblock' oder 'server-minecraft-skyblock'
             for s in servers:
                 s_name = s.get("name", "").lower()
                 if (
@@ -103,6 +102,47 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     target_ip = target.get("ip")
     target_id = str(target.get("server_id"))
 
+    # 1. Server in Supabase suchen und DNS-Reset auf 0.0.0.0 vorbereiten
+    status_srv, resp_srv = supabase.supabase_client_request(
+        f"dim_servers?full_name=eq.{target['name']}",
+        method="GET"
+    )
+    db_servers = json.loads(resp_srv) if status_srv == 200 else []
+
+    if db_servers:
+        srv_row = db_servers[0]
+        srv_id = srv_row.get("server_id")
+
+        # Status auf offline setzen
+        supabase.supabase_client_request(
+            f"dim_servers?server_id=eq.{srv_id}",
+            method="PATCH",
+            data={"status": "offline"}
+        )
+
+        # Zugeordnete Subdomain ermitteln
+        target_sub = None
+        status_dns, resp_dns = supabase.supabase_client_request(
+            f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain",
+            method="GET"
+        )
+        if status_dns == 200 and json.loads(resp_dns):
+            target_sub = json.loads(resp_dns)[0].get("subdomain")
+
+        if not target_sub:
+            slug = srv_row.get("server_slug", "")
+            target_sub = os.environ.get("GODADDY_SUBDOMAIN", "mc") if slug in ["minecraft-default", "default"] else slug
+
+        # DNS-Record sofort auf 0.0.0.0 zurücksetzen
+        if target_sub:
+            dns.update_godaddy_dns("0.0.0.0", subdomain=target_sub, server_id=srv_id)
+    else:
+        supabase.supabase_client_request(
+            f"dim_servers?full_name=eq.{target['name']}",
+            method="PATCH",
+            data={"status": "offline"}
+        )
+
     graceful_success = False
     if target_ip:
         try:
@@ -111,13 +151,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
                 graceful_success = True
         except Exception as e:
             print(f"[REST_API] Agent auf {target_ip} nicht erreichbar: {e}")
-
-    # dim_servers status auf offline setzen
-    supabase.supabase_client_request(
-        f"dim_servers?full_name=eq.{target['name']}",
-        method="PATCH",
-        data={"status": "offline"}
-    )
 
     if graceful_success:
         return 200, {

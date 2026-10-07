@@ -16,17 +16,17 @@ def _get_headers() -> dict:
     }
 
 def update_godaddy_dns(ip: str, subdomain: str | None = None, server_id: str | None = None) -> bool:
-    """
-    Aktualisiert den A-Record bei GoDaddy und spiegelt ihn in dim_dns_records.
-    Voll abwärtskompatibel mit update_godaddy_dns(ip).
-    """
+    """Aktualisiert exakt eine Subdomain bei GoDaddy und katalogisiert sie in Supabase."""
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:
-        print("[DNS WARNING] GoDaddy API Keys fehlen!")
+        print("[DNS ERROR] GoDaddy API Keys fehlen in Umgebungsvariablen.")
         return False
 
-    sub = (subdomain or GODADDY_SUBDOMAIN).strip().lower()
-    url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records/A/{sub}"
+    target_sub = (subdomain or os.environ.get("GODADDY_SUBDOMAIN", "mc")).strip().lower()
+    domain = GODADDY_DOMAIN
+
+    url = f"https://api.godaddy.com/v1/domains/{domain}/records/A/{target_sub}"
     payload = [{"data": ip, "ttl": 600}]
+
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -35,34 +35,39 @@ def update_godaddy_dns(ip: str, subdomain: str | None = None, server_id: str | N
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            print(f"[DNS] GoDaddy Record {sub}.{GODADDY_DOMAIN} -> {ip} aktualisiert ({resp.status})")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            if resp.status in [200, 204]:
+                print(f"[DNS] GoDaddy Record {target_sub}.{domain} -> {ip} aktualisiert ({resp.status})")
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+                dns_entry = {
+                    "domain": domain,
+                    "subdomain": target_sub,
+                    "record_type": "A",
+                    "record_value": ip,
+                    "ttl": 600,
+                    "used_for": "game-server",
+                    "last_synced_with_godaddy": now_iso
+                }
+                if server_id:
+                    dns_entry["server_id"] = server_id
+
+                supabase_client_request(
+                    "dim_dns_records",
+                    method="POST",
+                    data=dns_entry,
+                    headers_extra={"Prefer": "resolution=merge-duplicates"}
+                )
+                return True
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8") if e.fp else ""
+        print(f"[DNS ERROR] GoDaddy Update fehlgeschlagen ({e.code}): {err_msg}")
+        return False
     except Exception as e:
-        print(f"[DNS] GoDaddy DNS Fehler: {e}")
+        print(f"[DNS ERROR] Unerwarteter Fehler bei DNS-Aktualisierung: {e}")
         return False
 
-    # Snapshot in Supabase spiegeln (Fail-safe, wirft keine Exceptions)
-    try:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        supabase_client_request(
-            "dim_dns_records",
-            method="POST",
-            data={
-                "domain": GODADDY_DOMAIN,
-                "subdomain": sub,
-                "record_type": "A",
-                "record_value": ip,
-                "ttl": 600,
-                "used_for": "game-server",
-                "server_id": server_id,
-                "last_synced_with_godaddy": now_iso
-            },
-            headers_extra={"Prefer": "resolution=merge-duplicates"}
-        )
-    except Exception as e:
-        print(f"[DNS WARNING] Supabase Snapshot fehlgeschlagen: {e}")
-
-    return True
+    return False
 
 def delete_godaddy_dns(subdomain: str) -> bool:
     """Löscht einen A-Record bei GoDaddy und entfernt ihn aus dim_dns_records."""

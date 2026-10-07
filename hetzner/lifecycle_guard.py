@@ -118,7 +118,7 @@ def flush_final_shutdown_logs():
 
 def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
     duration = int(time.time() - start_time)
-    
+
     if reason == "manual":
         send_status(f"🛑 **Server-Stop via Discord ausgeführt.** Server wird beendet (Laufzeit: {duration // 60}m).")
     elif reason == "idle":
@@ -134,26 +134,42 @@ def execute_shutdown(server_id: str, start_time: float, reason: str = "limit"):
     print("[GUARD] 2. Schließe Server-Run in Supabase ab...", flush=True)
     close_server_run_in_supabase(server_id, reason)
 
-    # 3. Docker Container stoppen (Minecraft flusht Chunks)
-    print("[GUARD] 3. Stoppe Docker-Container sauber...", flush=True)
+    # 3. DNS-Record bei automatischem Shutdown via API/Supabase auf 0.0.0.0 zurücksetzen
+    print("[GUARD] 3. Setze DNS-Record auf 0.0.0.0 zurück...", flush=True)
+    hub_api_url = os.environ.get("HUB_API_URL")
+    auth_token = os.environ.get("AUTH_TOKEN")
+    current_slug = os.environ.get("SERVER_SLUG")
+    if hub_api_url and auth_token and current_slug:
+        try:
+            requests.post(
+                f"{hub_api_url.rstrip('/')}/server/stop",
+                json={"name": current_slug},
+                headers={"x-auth-token": auth_token, "Content-Type": "application/json"},
+                timeout=5
+            )
+        except Exception as e:
+            print(f"[GUARD WARNING] DNS-Reset via API fehlgeschlagen: {e}", flush=True)
+
+    # 4. Docker Container stoppen (Minecraft flusht Chunks)
+    print("[GUARD] 4. Stoppe Docker-Container sauber...", flush=True)
     subprocess.run(["docker", "compose", "-f", f"{MOUNT_DIR}/docker-compose.yml", "stop", "-t", "60"], check=False)
     subprocess.run(["sync"], check=False)
 
-    # 4. Finale Logs senden
-    print("[GUARD] 4. Sende finale Shutdown-Logs an Discord...", flush=True)
+    # 5. Finale Logs senden
+    print("[GUARD] 5. Sende finale Shutdown-Logs an Discord...", flush=True)
     flush_final_shutdown_logs()
 
-    # 5. Streamer & Control API stoppen
-    print("[GUARD] 5. Stoppe Streamer und Control API...", flush=True)
+    # 6. Streamer & Control API stoppen
+    print("[GUARD] 6. Stoppe Streamer und Control API...", flush=True)
     subprocess.run(["systemctl", "stop", "gameserver-logs.service"], check=False)
     subprocess.run(["systemctl", "stop", "gameserver-control.service"], check=False)
 
-    # 6. Volume unmounten
-    print("[GUARD] 6. Unmounte Volume...", flush=True)
+    # 7. Volume unmounten
+    print("[GUARD] 7. Unmounte Volume...", flush=True)
     subprocess.run(["umount", "-l", MOUNT_DIR], check=False)
 
-    # 7. Hetzner Server via API löschen
-    print(f"[GUARD] 7. Lösche Hetzner Server {server_id}...", flush=True)
+    # 8. Hetzner Server via API löschen
+    print(f"[GUARD] 8. Lösche Hetzner Server {server_id}...", flush=True)
     if server_id and HETZNER_API_TOKEN:
         headers = {"Authorization": f"Bearer {HETZNER_API_TOKEN}"}
         try:
