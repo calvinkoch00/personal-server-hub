@@ -7,24 +7,36 @@ from commands import server, finance, accounts
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 
 def send_followup(token: str, content: str | dict, app_id: str | None = None):
-    resolved_app_id = app_id or DISCORD_APP_ID
+    resolved_app_id = app_id or os.environ.get("DISCORD_APPLICATION_ID")
     if not resolved_app_id or not token:
+        print(f"[DISCORD FOLLOWUP ERROR] Fehlende App-ID ({resolved_app_id}) oder Token ({bool(token)})")
         return
 
     url = f"https://discord.com/api/v10/webhooks/{resolved_app_id}/{token}/messages/@original"
-    payload = content if isinstance(content, dict) else {"content": str(content)}
+    
+    if isinstance(content, dict):
+        payload = content
+    else:
+        payload = {"content": str(content)}
 
+    data_bytes = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        data=data_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "DiscordBot (https://github.com/calvinkoch00/personal-server-hub, 1.0)"
+        },
         method="PATCH"
     )
     try:
-        with urllib.request.urlopen(req, timeout=10.0):
-            pass
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            print(f"[DISCORD FOLLOWUP] Erfolgreich zugestellt: Status {resp.status}")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8") if e.fp else ""
+        print(f"[DISCORD FOLLOWUP HTTP ERROR] Code {e.code}: {err_body}")
     except Exception as e:
-        print(f"[DISCORD FOLLOWUP ERROR] {e}")
+        print(f"[DISCORD FOLLOWUP ERROR] Fehler: {e}")
 
 def handle_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
@@ -99,19 +111,22 @@ def handle_interaction(body: dict) -> dict:
 
     # Zeitaufwendige Server-Befehle via Background-Followup ausführen
     if command == "server" and subcommand in ["start", "stop", "reload-files", "create"]:
+        res_text = "Befehl ausgeführt."
         if subcommand == "start":
-            res = server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})
+            res_text = server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})
         elif subcommand == "stop":
-            res = server.handle_stop({"name": sub_options.get("name")})
+            res_text = server.handle_stop({"name": sub_options.get("name")})
         elif subcommand == "reload-files":
-            res = server.handle_reload_files(sub_options)
+            res_text = server.handle_reload_files(sub_options)
         elif subcommand == "create":
-            res = server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)
+            res_text = server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)
 
-        send_followup(interaction_token, res, app_id)
+        # Erst Followup senden
+        send_followup(interaction_token, res_text, app_id)
+
         return {
             "statusCode": 200,
-            "body": {"type": 5}  # Deferred Response ("Bot denkt nach...")
+            "body": {"type": 5}
         }
 
     # Sofortige Befehle
