@@ -188,13 +188,46 @@ except Exception as e:
 " || echo "[BOOTSTRAP] Whitelist-Generierung übersprungen"
 fi
 
-# 7. Spielcontainer via Docker Compose starten
+# 7. Spielcontainer prüfen, bei Bedarf initialisieren und starten
+cd "$MOUNT_DIR"
+
+if [ ! -f "$MOUNT_DIR/docker-compose.yml" ] && [ ! -f "$MOUNT_DIR/compose.yml" ]; then
+    echo "[BOOTSTRAP] Frisches Volume erkannt! Initialisiere Standard-Setup für: ${GAME:-minecraft}..."
+
+    mkdir -p "$MOUNT_DIR/data"
+
+    if [ "${GAME:-minecraft}" = "minecraft" ]; then
+        cat << 'EOF_COMPOSE' > "$MOUNT_DIR/docker-compose.yml"
+services:
+  mc:
+    image: itzg/minecraft-server:latest
+    container_name: mc-server
+    restart: always
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      MEMORY: "6G"
+      ENABLE_RCON: "true"
+      RCON_PORT: "25575"
+      RCON_PASSWORD: "minecraft_secret_rcon"
+      ENABLE_WHITELIST: "TRUE"
+      ENFORCE_WHITELIST: "TRUE"
+      OVERRIDE_WHITELIST: "FALSE"
+      ONLINE_MODE: "TRUE"
+    volumes:
+      - /mnt/gamespeicher/data:/data
+EOF_COMPOSE
+        echo "[BOOTSTRAP] docker-compose.yml für Minecraft erfolgreich erstellt."
+    fi
+fi
+
 if [ -f "$MOUNT_DIR/docker-compose.yml" ] || [ -f "$MOUNT_DIR/compose.yml" ]; then
-    echo "[BOOTSTRAP] Starte Gameserver Container..."
-    cd "$MOUNT_DIR"
+    echo "[BOOTSTRAP] Starte Gameserver Container via Docker Compose..."
     docker compose up -d
 else
-    echo "[BOOTSTRAP] Warnung: Keine docker-compose.yml in $MOUNT_DIR gefunden!"
+    echo "[BOOTSTRAP] Fehler: Keine docker-compose.yml vorhanden und kein Template gefunden!"
 fi
 
 echo "[BOOTSTRAP] Stage-2 Boot abgeschlossen!"
