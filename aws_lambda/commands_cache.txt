@@ -6,9 +6,9 @@
 • `/server status` — Zeigt alle registrierten Server und deren Status
 • `/server create <name> [game] [subdomain]` — Erstellt ein neues Server-Volume
 • `/server delete <name>` — Löscht einen Server und dessen Volume unwiderruflich
-• `/whitelist add <username> [server] [role]` — Fügt einen Spieler zur Whitelist hinzu
-• `/whitelist remove <username> [server]` — Entfernt einen Spieler von der Whitelist
-• `/whitelist list [server]` — Zeigt alle gewhitelisteten Spieler eines Servers
+• `/whitelist add <username> <server> [role]` — Fügt einen Spieler zur Whitelist hinzu oder passt die Rolle an
+• `/whitelist remove <username> <server>` — Entfernt einen Spieler von der Whitelist
+• `/whitelist list <server>` — Zeigt alle gewhitelisteten Spieler eines Servers
 • `/status` — Zeigt alle aktiven Server samt IP an
 • `/log <mode> [server]` — Schaltet Live-Server-Logs im laufenden Betrieb um
 • `/stop` — Stoppt und löscht den aktuell laufenden Server
