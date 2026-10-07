@@ -22,9 +22,9 @@ def handle_account(data: dict, caller_id: str) -> str:
         table += "-" * 42 + "\n"
         for r in rows:
             name = str(r.get("discord_username") or "Unknown")[:13]
-            paid = f"{float(r.get('total_paid_eur', 0)):.2f}€"
-            cost = f"{float(r.get('total_cost_gross_eur', 0)):.2f}€"
-            bal = float(r.get("current_balance_eur", 0))
+            paid = f"{float(r.get('total_paid', 0)):.2f}€"
+            cost = f"{float(r.get('total_cost_gross', 0)):.2f}€"
+            bal = float(r.get("current_balance", 0))
             icon = "+" if bal >= 0 else ""
             table += f"{name:<14} | {paid:<8} | {cost:<8} | {icon}{bal:.2f}€\n"
         table += "```"
@@ -43,19 +43,17 @@ def handle_account(data: dict, caller_id: str) -> str:
             return f"ℹ️ Für <@{target_uid}> wurden bisher keine Daten oder Spielzeiten erfasst."
 
         uname = r.get("discord_username") or display_name
-        paid_eur = float(r.get("total_paid_eur", 0))
-        paid_chf = float(r.get("total_paid_chf", 0))
+        paid = float(r.get("total_paid", 0))
         hours = float(r.get("total_hours_played", 0))
-        cost_gross = float(r.get("total_cost_gross_eur", 0))
-        balance = float(r.get("current_balance_eur", 0))
+        cost_gross = float(r.get("total_cost_gross", 0))
+        balance = float(r.get("current_balance", 0))
 
         status_emoji = "🟢" if balance >= 0 else "🔴"
         status_label = "Guthaben" if balance >= 0 else "Offener Betrag (Schulden)"
-        chf_note = f" (davon {paid_chf:.2f} CHF)" if paid_chf > 0 else ""
 
         return (
             f"💳 **Kontostand für `{uname}`**\n\n"
-            f"• Eingezahlt: `{paid_eur:.2f} €`{chf_note}\n"
+            f"• Eingezahlt: `{paid:.2f} €`\n"
             f"• Verursachte Serverkosten: `{cost_gross:.2f} €` *({hours:.1f}h Spielzeit inkl. 8.1% MWST)*\n"
             f"• **{status_label}: {balance:+.2f} €** {status_emoji}"
         )
@@ -65,7 +63,7 @@ def handle_cash(data: dict, caller_id: str, caller_name: str) -> str:
     is_admin = False
     if status_role == 200:
         user_records = json.loads(resp_role)
-        if user_records and user_records[0].get("role") == "admin":
+        if user_records and user_records[0].get("role") in ["admin", "superadmin"]:
             is_admin = True
 
     if not is_admin:
@@ -105,8 +103,8 @@ def handle_cash(data: dict, caller_id: str, caller_name: str) -> str:
     return (
         f"✅ **Zahlung erfolgreich verbucht!**\n"
         f"• Nutzer: <@{target_uid}>\n"
-        f"• Erhaltener Betrag: `{payment['amount_original']:.2f} {payment['currency']}`\n"
-        f"• Gutgeschrieben in EUR: **`+{payment['amount_eur']:.2f} €`**{fx_text}\n"
+        f"• Erhaltener Betrag: `{payment['payment_amount']:.2f} {payment['payment_currency']}`\n"
+        f"• Gutgeschrieben in EUR: **`+{payment['amount']:.2f} €`**{fx_text}\n"
         f"• Notiz: *{payment['note']}* (gebucht von `{caller_name}`)"
     )
 
@@ -115,7 +113,7 @@ def handle_addgameaccount(data: dict, caller_id: str, caller_data: dict) -> str:
     discord_username = str(caller_data.get("username", "Unknown"))
 
     options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
-    game = str(options.get("game", "")).strip().lower()
+    game = str(options.get("game", "minecraft")).strip().lower()
     username = str(options.get("username", "")).strip()
 
     if not game or not username:
@@ -131,11 +129,63 @@ def handle_addgameaccount(data: dict, caller_id: str, caller_data: dict) -> str:
 
         if status == 200:
             if resp.get("status") == "already_linked_self":
-                return f"ℹ Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
-            return f"✅ Ingame-Account `{username}` ({game.upper()}) wurde erfolgreich mit deinem Discord-Profil verknüpft!"
+                return f"ℹ Der Ingame-Account `{resp.get('username')}` ({game.upper()}) ist bereits mit deinem Profil verknüpft."
+            return (
+                f"✅ Ingame-Account `{resp.get('username')}` ({game.upper()}) wurde erfolgreich verknüpft!\n"
+                f"• Mojang UUID: `{resp.get('mojang_uuid')}`"
+            )
         elif status == 403:
             return f"⛔ **Zugriff verweigert:** Der Ingame-Account `{username}` ({game.upper()}) ist bereits mit einem anderen Discord-Account verknüpft!"
         else:
             return f"⚠ {resp.get('error')}"
     except Exception as e:
         return f"❌ Datenbankfehler: {e}"
+
+def handle_whitelist(subcommand: str, sub_options: dict, caller_id: str) -> str:
+    user = str(sub_options.get("username", "")).strip()
+    server_name = str(sub_options.get("server") or "default").strip()
+    role = str(sub_options.get("role", "player")).strip()
+
+    if subcommand == "add":
+        status, resp = rest_api.handle_whitelist_add({
+            "server_name": server_name,
+            "username": user,
+            "discord_user_id": caller_id,
+            "role": role
+        })
+        if status == 200:
+            sync_txt = " (Live auf laufendem Server aktiv!)" if resp.get("live_synced") else " (aktiviert bei nächstem Serverstart)"
+            return f"✅ Spieler `{resp['username']}` wurde als `{resp['role']}` zur Whitelist von `{resp['server']}` hinzugefügt!{sync_txt}"
+        return f"❌ {resp.get('error')}"
+
+    elif subcommand == "remove":
+        status, resp = rest_api.handle_whitelist_remove({
+            "server_name": server_name,
+            "username": user,
+            "discord_user_id": caller_id
+        })
+        if status == 200:
+            sync_txt = " (Live vom laufenden Server entfernt!)" if resp.get("live_synced") else ""
+            return f"🗑️ Spieler `{resp['username']}` wurde von der Whitelist von `{resp['server']}` entfernt.{sync_txt}"
+        return f"❌ {resp.get('error')}"
+
+    elif subcommand == "list":
+        status, resp = rest_api.handle_whitelist_list({
+            "server_name": server_name
+        })
+        if status == 200:
+            entries = resp.get("entries", [])
+            if not entries:
+                return f"ℹ️ Keine Whitelist-Einträge für Server `{resp['server']}` vorhanden (Policy: `{resp.get('policy')}`)."
+
+            lines = []
+            for e in entries:
+                acc = e.get("dim_game_accounts") or {}
+                name = acc.get("ingame_username", "Unknown")
+                r = e.get("role", "player")
+                icon = "👑" if r == "server-admin" else "👤"
+                lines.append(f"• {icon} `{name}` ({r})")
+            return f"📋 **Whitelist für `{resp['server']}`:**\n" + "\n".join(lines)
+        return f"❌ {resp.get('error')}"
+
+    return "❌ Unbekannter Whitelist-Befehl"

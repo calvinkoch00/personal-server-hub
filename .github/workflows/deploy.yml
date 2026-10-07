@@ -27,6 +27,7 @@ jobs:
         with:
           files: |
             scripts/register_discord_commands.py
+            scripts/discord_commands.json
 
       - name: Register Discord Commands & Update Cache
         # Läuft bei Änderungen am Skript ODER manuellem Trigger

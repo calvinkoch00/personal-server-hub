@@ -15,6 +15,13 @@ def handle_interaction(body: dict) -> dict:
     caller_id = str(caller_data.get("id"))
     caller_name = str(caller_data.get("username", "Admin"))
 
+    options_list = data.get("options", [])
+    subcommand = None
+    sub_options = {}
+    if options_list and options_list[0].get("type") == 1:
+        subcommand = options_list[0].get("name")
+        sub_options = {o["name"]: o.get("value") for o in options_list[0].get("options", [])}
+
     if command == "help":
         msg = server.get_help_message()
     elif command == "status":
@@ -23,6 +30,21 @@ def handle_interaction(body: dict) -> dict:
         msg = server.handle_stop()
     elif command == "start":
         msg = server.handle_start(data)
+    elif command == "server":
+        if subcommand == "start":
+            msg = server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})
+        elif subcommand == "stop":
+            msg = server.handle_stop({"server_id": sub_options.get("name")})
+        elif subcommand == "status":
+            msg = server.handle_status()
+        elif subcommand == "create":
+            msg = server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)
+        elif subcommand == "delete":
+            msg = server.handle_delete({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)
+        else:
+            msg = "Unbekannter Server-Befehl."
+    elif command == "whitelist":
+        msg = accounts.handle_whitelist(subcommand, sub_options, caller_id)
     elif command == "log":
         msg = server.handle_log(data)
     elif command == "costs":
