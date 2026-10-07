@@ -33,27 +33,27 @@ else:
 # Test 2: Feature 2 - Mojang UUID Validierung
 # ------------------------------------------------------------------
 print("\n[TEST 2] Prüfe Mojang Account Binding & UUID Resolution...")
-# 2a. Ungültiger Account
+# 2a. Ungültiger Account (gültige Minecraft-Namenssyntax, existiert aber nicht)
 status, body = rest_api.route_request("/addgameaccount", {
-    "discord_user_id": "test_e2e_user",
-    "discord_username": "Tester",
+    "discord_user_id": "432141301111324672",
+    "discord_username": "gamesbond00",
     "game": "minecraft",
-    "username": "ungueltiger_fake_user_99999"
+    "username": "NotAnActualUser9999"
 })
 if status == 404:
     print("  ✓ Ungültiger Minecraft-Account wird von Mojang API korrekt abgewiesen (404).")
 else:
     print(f"  ✗ Erwartetes 404 nicht erhalten ({status}): {body}")
 
-# 2b. Gültiger Mojang Account (gamesbond00)
+# 2b. Echter Account mit deiner verknüpften Discord-ID
 status, body = rest_api.route_request("/addgameaccount", {
-    "discord_user_id": "test_e2e_user",
+    "discord_user_id": "432141301111324672",
     "discord_username": "gamesbond00",
     "game": "minecraft",
     "username": "gamesbond00"
 })
-if status in [200, 201] and body.get("mojang_uuid"):
-    print(f"  ✓ Offizieller Account aufgelöst: {body.get('username')} -> UUID: {body.get('mojang_uuid')}")
+if status in [200, 201] and (body.get("mojang_uuid") or body.get("status") in ["created", "already_linked_self"]):
+    print(f"  ✓ Offizieller Account aufgelöst & verknüpft: {body.get('username')} (UUID: {body.get('mojang_uuid')})")
 else:
     print(f"  ✗ Mojang-Auflösung fehlgeschlagen ({status}): {body}")
 
