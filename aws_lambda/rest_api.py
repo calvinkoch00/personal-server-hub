@@ -188,27 +188,44 @@ def handle_server_delete(payload: dict) -> tuple[int, dict]:
         if user_role != "superadmin":
             return 403, {"error": "Nur der Superadmin darf den Default-Server löschen."}
 
-    status_s, resp_s = supabase.supabase_client_request(f"dim_servers?server_slug=eq.{raw_slug}&status=neq.deleted", method="GET")
+    # Nur aktive (nicht bereits gelöschte) Server finden
+    status_s, resp_s = supabase.supabase_client_request(f"dim_servers?game=eq.{game}&server_slug=eq.{raw_slug}&status=neq.deleted", method="GET")
     if status_s != 200 or not json.loads(resp_s):
-        return 404, {"error": f"Server '{raw_slug}' nicht gefunden"}
+        return 404, {"error": f"Server '{raw_slug}' nicht gefunden oder bereits gelöscht."}
 
     srv = json.loads(resp_s)[0]
+    srv_id = srv["server_id"]
 
+    # 1. Hetzner Volume löschen
     hetzner.delete_volume(srv["hetzner_volume_id"])
 
-    status_dns, resp_dns = supabase.supabase_client_request(f"dim_dns_records?server_id=eq.{srv['server_id']}&select=subdomain", method="GET")
+    # 2. DNS-Records ermitteln (über server_id ODER direkt über den Subdomain-Namen)
+    subdomains_to_delete = set()
+    
+    # Abfrage per server_id
+    status_dns, resp_dns = supabase.supabase_client_request(f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain", method="GET")
     if status_dns == 200:
         for d in json.loads(resp_dns):
             if d.get("subdomain"):
-                dns.delete_godaddy_dns(d["subdomain"])
+                subdomains_to_delete.add(d["subdomain"])
 
+    # Fallback: Falls Subdomain gleich raw_slug war
+    subdomains_to_delete.add(raw_slug)
+
+    # 3. DNS-Records bei GoDaddy und in dim_dns_records aufräumen
+    for sub in subdomains_to_delete:
+        if sub and sub != "mc":  # Standard-Domain mc nicht versehentlich löschen
+            dns.delete_godaddy_dns(sub)
+            supabase.supabase_client_request(f"dim_dns_records?subdomain=eq.{sub}", method="DELETE")
+
+    # 4. In dim_servers auf deleted setzen
     now_iso = datetime.now(timezone.utc).isoformat()
     supabase.supabase_client_request(
-        f"dim_servers?server_id=eq.{srv['server_id']}",
+        f"dim_servers?server_id=eq.{srv_id}",
         method="PATCH",
         data={"status": "deleted", "deleted_at": now_iso}
     )
-    return 200, {"message": f"Server '{srv['display_name']}' gelöscht"}
+    return 200, {"message": f"Server '{srv['display_name']}' und zugehörige DNS-Einträge gelöscht"}
 
 def handle_log(payload: dict) -> tuple[int, dict]:
     raw_mode = str(payload.get("mode", "game")).strip().lower()
