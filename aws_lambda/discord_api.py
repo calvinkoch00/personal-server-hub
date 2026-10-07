@@ -1,54 +1,18 @@
 import os
 import json
-import urllib.request
-import rest_api
 from commands import server, finance, accounts
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 
-def send_followup(token: str, content: str | dict, app_id: str | None = None):
-    resolved_app_id = app_id or os.environ.get("DISCORD_APPLICATION_ID")
-    if not resolved_app_id or not token:
-        print(f"[DISCORD FOLLOWUP ERROR] Fehlende App-ID ({resolved_app_id}) oder Token ({bool(token)})")
-        return
-
-    url = f"https://discord.com/api/v10/webhooks/{resolved_app_id}/{token}/messages/@original"
-    
-    if isinstance(content, dict):
-        payload = content
-    else:
-        payload = {"content": str(content)}
-
-    data_bytes = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data_bytes,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "DiscordBot (https://github.com/calvinkoch00/personal-server-hub, 1.0)"
-        },
-        method="PATCH"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10.0) as resp:
-            print(f"[DISCORD FOLLOWUP] Erfolgreich zugestellt: Status {resp.status}")
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8") if e.fp else ""
-        print(f"[DISCORD FOLLOWUP HTTP ERROR] Code {e.code}: {err_body}")
-    except Exception as e:
-        print(f"[DISCORD FOLLOWUP ERROR] Fehler: {e}")
-
 def handle_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
 
-    # 1. Ping-Pong
+    # 1. Discord Ping/Pong (Muss in < 10ms beantwortet werden)
     if interaction_type == 1:
         return {"statusCode": 200, "body": {"type": 1}}
 
-    interaction_token = body.get("token")
-    app_id = body.get("application_id") or DISCORD_APP_ID
     caller_data = body.get("member", {}).get("user") or body.get("user", {})
-    caller_id = str(caller_data.get("id"))
+    caller_id = str(caller_data.get("id", ""))
     caller_name = str(caller_data.get("username", "Admin"))
 
     # 2. Button Klick (2-stufige Bestätigung für /server delete)
@@ -81,6 +45,8 @@ def handle_interaction(body: dict) -> dict:
                     "body": {"type": 4, "data": {"content": "⛔ Du bist nicht berechtigt, diese Aktion zu bestätigen.", "flags": 64}}
                 }
 
+            # Import erst hier lokal, um zirkuläre Ladekonflikte beim Booten zu verhindern
+            import rest_api
             status, resp = rest_api.handle_server_delete({
                 "server_name": server_slug,
                 "discord_user_id": caller_id
@@ -109,27 +75,6 @@ def handle_interaction(body: dict) -> dict:
         subcommand = options_list[0].get("name")
         sub_options = {o["name"]: o.get("value") for o in options_list[0].get("options", [])}
 
-    # Zeitaufwendige Server-Befehle via Background-Followup ausführen
-    if command == "server" and subcommand in ["start", "stop", "reload-files", "create"]:
-        res_text = "Befehl ausgeführt."
-        if subcommand == "start":
-            res_text = server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})
-        elif subcommand == "stop":
-            res_text = server.handle_stop({"name": sub_options.get("name")})
-        elif subcommand == "reload-files":
-            res_text = server.handle_reload_files(sub_options)
-        elif subcommand == "create":
-            res_text = server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)
-
-        # Erst Followup senden
-        send_followup(interaction_token, res_text, app_id)
-
-        return {
-            "statusCode": 200,
-            "body": {"type": 5}
-        }
-
-    # Sofortige Befehle
     response_data = None
 
     if command == "help":
@@ -137,8 +82,16 @@ def handle_interaction(body: dict) -> dict:
     elif command == "status":
         response_data = {"content": server.handle_status()}
     elif command == "server":
-        if subcommand == "status":
+        if subcommand == "start":
+            response_data = {"content": server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})}
+        elif subcommand == "stop":
+            response_data = {"content": server.handle_stop({"name": sub_options.get("name")})}
+        elif subcommand == "reload-files":
+            response_data = {"content": server.handle_reload_files(sub_options)}
+        elif subcommand == "status":
             response_data = {"content": server.handle_status()}
+        elif subcommand == "create":
+            response_data = {"content": server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)}
         elif subcommand == "delete":
             del_result = server.handle_delete(sub_options, caller_id)
             response_data = del_result if isinstance(del_result, dict) else {"content": str(del_result)}
