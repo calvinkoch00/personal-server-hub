@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from services import hetzner, agent, supabase, fx
+from services import hetzner, agent, supabase, fx, dns
 
 def handle_start(payload: dict) -> tuple[int, dict]:
     game = payload.get("game", "minecraft").strip().lower()
@@ -98,7 +98,7 @@ def handle_costs(payload: dict) -> tuple[int, dict]:
 def handle_account(payload: dict) -> tuple[int, dict]:
     user_param = payload.get("user", "me")
     if str(user_param).lower() == "all":
-        status, resp_text = supabase.supabase_client_request("view_user_balances?select=*&order=current_balance_eur.asc", method="GET")
+        status, resp_text = supabase.supabase_client_request("view_user_balances?select=*&order=current_balance.asc", method="GET")
         if status == 200:
             return 200, {"mode": "all", "rows": json.loads(resp_text)}
         return status, {"error": f"Fehler beim Abrufen der Kontostände ({status}): {resp_text}"}
@@ -143,11 +143,12 @@ def handle_cash(payload: dict) -> tuple[int, dict]:
     amount_target = round(amount_orig * fx_rate, 2)
     payment_data = {
         "discord_user_id": target_uid,
-        "amount_original": amount_orig,
-        "currency": currency,
+        "amount": amount_target,             # Betrag in Systemwährung (EUR)
+        "currency": target_currency,         # Standard: EUR
+        "payment_amount": amount_orig,       # Erhaltene Originalwährung
+        "payment_currency": currency,
         "exchange_rate": fx_rate,
         "exchange_rate_id": rate_id,
-        "amount_eur": amount_target,
         "note": note,
         "created_by": caller_name
     }
@@ -200,6 +201,18 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
         return 200, {"status": "created", "game": game, "username": username}
     return status_a, {"error": f"Fehler beim Verknüpfen ({status_a}): {resp_a}"}
 
+def handle_dns_sync(payload: dict) -> tuple[int, dict]:
+    res = dns.sync_all_dns_from_godaddy()
+    if "error" in res:
+        return 500, res
+    return 200, res
+
+def handle_dns_records(payload: dict) -> tuple[int, dict]:
+    status, resp = supabase.supabase_client_request("dim_dns_records?order=subdomain.asc", method="GET")
+    if status == 200:
+        return 200, {"records": json.loads(resp)}
+    return status, {"error": f"Fehler beim Laden der DNS-Records: {resp}"}
+
 def route_request(path: str, body: dict) -> tuple[int, dict]:
     raw_path = path or "/"
     action = body.get("action")
@@ -222,5 +235,9 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
         return handle_exchange_rate(body)
     if raw_path.endswith("/addgameaccount") or action == "addgameaccount":
         return handle_addgameaccount(body)
+    if raw_path.endswith("/dns/sync") or action == "dns_sync":
+        return handle_dns_sync(body)
+    if raw_path.endswith("/dns/records") or action == "dns_records":
+        return handle_dns_records(body)
 
     return 404, {"error": f"Endpoint '{raw_path}' nicht gefunden"}
