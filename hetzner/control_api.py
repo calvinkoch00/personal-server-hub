@@ -85,7 +85,8 @@ class Handler(BaseHTTPRequestHandler):
                 content_len = int(self.headers.get("Content-Length", 0))
                 payload = json.loads(self.rfile.read(content_len).decode("utf-8"))
                 user = payload.get("username", "").strip()
-                is_op = payload.get("op", False)
+                # Liest sowohl 'op' als auch 'is_op' sauber aus
+                is_op = bool(payload.get("op", payload.get("is_op", False)))
             except Exception:
                 user = ""
                 is_op = False
@@ -102,15 +103,17 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 if self.path == "/whitelist/add":
-                    subprocess.run(["docker", "exec", cid, "rcon-cli", f"whitelist add {user}"], check=False)
+                    subprocess.run(["docker", "exec", cid, "rcon-cli", "whitelist", "add", user], check=False)
                     if is_op:
-                        subprocess.run(["docker", "exec", cid, "rcon-cli", f"op {user}"], check=False)
+                        subprocess.run(["docker", "exec", cid, "rcon-cli", "op", user], check=False)
+                    else:
+                        subprocess.run(["docker", "exec", cid, "rcon-cli", "deop", user], check=False)
                 else:
-                    subprocess.run(["docker", "exec", cid, "rcon-cli", f"whitelist remove {user}"], check=False)
-                    subprocess.run(["docker", "exec", cid, "rcon-cli", f"deop {user}"], check=False)
+                    subprocess.run(["docker", "exec", cid, "rcon-cli", "whitelist", "remove", user], check=False)
+                    subprocess.run(["docker", "exec", cid, "rcon-cli", "deop", user], check=False)
 
-                subprocess.run(["docker", "exec", cid, "rcon-cli", "whitelist reload"], check=False)
-                self._send_json(200, {"status": "ok", "user": user})
+                subprocess.run(["docker", "exec", cid, "rcon-cli", "whitelist", "reload"], check=False)
+                self._send_json(200, {"status": "ok", "user": user, "is_op": is_op})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
             return
