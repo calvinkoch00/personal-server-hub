@@ -4,7 +4,7 @@ import urllib.request
 import urllib.error
 from config import HETZNER_API_TOKEN, get_stage1_bootloader, get_game_config
 from services.dns import update_godaddy_dns
-from services.supabase import log_server_start_to_supabase
+from services.supabase import log_server_start_to_supabase, supabase_client_request
 
 BASE_URL = "https://api.hetzner.cloud/v1"
 
@@ -24,17 +24,46 @@ def _request(endpoint: str, method: str = "GET", data: dict | None = None) -> di
         err_body = e.read().decode("utf-8") if e.fp else ""
         raise RuntimeError(f"Hetzner API {e.code}: {err_body}")
 
+def create_volume(name: str, size_gb: int = 20, location: str = "nbg1") -> dict:
+    """Erstellt ein neues Block Storage Volume bei Hetzner."""
+    payload = {"name": name, "size": size_gb, "location": location, "format": "ext4"}
+    res = _request("volumes", method="POST", data=payload)
+    return res.get("volume", {})
+
+def delete_volume(volume_id: int) -> bool:
+    """Löscht ein Hetzner Block Volume."""
+    try:
+        _request(f"volumes/{volume_id}", method="DELETE")
+        return True
+    except Exception as e:
+        print(f"[HETZNER ERROR] Volume {volume_id} konnte nicht gelöscht werden: {e}")
+        return False
+
 def create_server(
     game: str = "minecraft",
+    server_name: str = "default",
     seconds: int = 300,
     readable: str = "5 Minute(n)",
-    server_type: str = "cpx32",
+    server_type: str | None = None,
     enable_logging: str = "none"
 ) -> dict:
-    game_cfg = get_game_config(game)
-    volume_id = game_cfg.get("volume_id", 107045799)
-    game_port = game_cfg.get("port", 25565)
-    resolved_type = server_type or game_cfg.get("default_type", "cpx32")
+    clean_game = game.strip().lower()
+    clean_name = server_name.strip().lower().replace(" ", "_")
+
+    # 1. Server-Metadaten aus dim_servers abfragen
+    status_sb, resp_sb = supabase_client_request(
+        f"dim_servers?game=eq.{clean_game}&server_name=eq.{clean_name}&status=neq.deleted&select=*",
+        method="GET"
+    )
+    db_server = json.loads(resp_sb)[0] if status_sb == 200 and json.loads(resp_sb) else None
+
+    # Fallback auf bestehende Konfiguration falls nicht in DB
+    game_cfg = get_game_config(clean_game)
+    volume_id = int(db_server["hetzner_volume_id"]) if db_server else game_cfg.get("volume_id", 107045799)
+    game_port = int(db_server["game_port"]) if db_server else game_cfg.get("port", 25565)
+    resolved_type = server_type or (db_server.get("hetzner_server_type") if db_server else None) or game_cfg.get("default_type", "cpx32")
+    subdomain = db_server.get("subdomain") if db_server else os.environ.get("GODADDY_SUBDOMAIN", "mc")
+    db_server_id = db_server.get("server_id") if db_server else None
 
     user_data = get_stage1_bootloader(
         volume_id=volume_id,
@@ -43,32 +72,39 @@ def create_server(
         enable_logging=enable_logging
     )
 
+    vm_name = db_server.get("full_name") if db_server else f"{clean_game}-ondemand"
     payload = {
-        "name": f"{game}-ondemand",
+        "name": vm_name,
         "server_type": resolved_type,
         "image": "ubuntu-24.04",
         "location": os.environ.get("HETZNER_LOCATION", "nbg1"),
         "user_data": user_data,
         "volumes": [volume_id],
-        "labels": {"game": game}
+        "labels": {"game": clean_game, "server_name": clean_name}
     }
 
     resp = _request("/servers", method="POST", data=payload)
     server_data = resp["server"]
     server_ip = server_data["public_net"]["ipv4"]["ip"]
 
-    update_godaddy_dns(server_ip)
-    log_server_start_to_supabase(server_data["id"], game, resolved_type)
+    # DNS aktualisieren mit Subdomain
+    update_godaddy_dns(ip=server_ip, subdomain=subdomain, server_id=db_server_id)
 
-    subdomain = os.environ.get("GODADDY_SUBDOMAIN", "mc")
+    # In Supabase protokollieren & Status auf online setzen
+    log_server_start_to_supabase(server_data["id"], clean_game, resolved_type, server_id=db_server_id)
+    if db_server_id:
+        supabase_client_request(f"dim_servers?server_id=eq.{db_server_id}", method="PATCH", data={"status": "online"})
+
     domain = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
 
     return {
         "server_id": server_data["id"],
+        "db_server_id": db_server_id,
         "name": server_data["name"],
-        "game": game,
+        "game": clean_game,
+        "server_name": clean_name,
         "ip": server_ip,
-        "domain": os.environ.get("DOMAIN_NAME", f"{subdomain}.{domain}"),
+        "domain": f"{subdomain}.{domain}",
         "lifetime_readable": readable,
         "server_type": resolved_type,
         "status": server_data["status"]

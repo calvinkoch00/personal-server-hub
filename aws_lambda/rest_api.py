@@ -1,12 +1,14 @@
 import os
 import re
 import json
+from datetime import datetime, timezone
 from services import hetzner, agent, supabase, fx, dns, mojang
 
 def handle_start(payload: dict) -> tuple[int, dict]:
-    game = payload.get("game", "minecraft").strip().lower()
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    server_name = str(payload.get("server_name") or payload.get("name") or "default").strip().lower().replace(" ", "_")
     duration_raw = str(payload.get("duration", "5m")).strip().lower()
-    server_type = payload.get("server_type", "cpx32")
+    server_type = payload.get("server_type")
     log_mode = str(payload.get("log", payload.get("logging", "none"))).strip().lower()
 
     if log_mode in ["true", "1"]:
@@ -26,21 +28,28 @@ def handle_start(payload: dict) -> tuple[int, dict]:
         seconds = 300
         readable = "5 Minute(n)"
 
-    result = hetzner.create_server(
-        game=game,
-        seconds=seconds,
-        readable=readable,
-        server_type=server_type,
-        enable_logging=log_mode
-    )
-    return 200, {
-        "message": "Server gestartet",
-        "discord_summary": f"🎮 {result['game'].upper()} gestartet! IP: `{result['ip']}` ({result['lifetime_readable']})",
-        "data": result,
-        "log_mode": log_mode
-    }
+    try:
+        result = hetzner.create_server(
+            game=game,
+            server_name=server_name,
+            seconds=seconds,
+            readable=readable,
+            server_type=server_type,
+            enable_logging=log_mode
+        )
+        return 200, {
+            "message": "Server gestartet",
+            "discord_summary": f"🎮 `{result['name']}` gestartet! IP: `{result['ip']}` | DNS: `{result.get('domain')}` ({result['lifetime_readable']})",
+            "data": result,
+            "log_mode": log_mode
+        }
+    except Exception as e:
+        return 500, {"error": f"Serverstart fehlgeschlagen: {str(e)}"}
 
 def handle_servers() -> tuple[int, dict]:
+    status, resp = supabase.supabase_client_request("dim_servers?status=neq.deleted&order=game.asc,server_name.asc", method="GET")
+    if status == 200:
+        return 200, {"servers": json.loads(resp)}
     return 200, {"data": hetzner.list_servers()}
 
 def handle_stop(payload: dict) -> tuple[int, dict]:
@@ -62,6 +71,13 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         except Exception as e:
             print(f"[REST_API] Agent auf {target_ip} nicht erreichbar: {e}")
 
+    # dim_servers status auf offline setzen
+    supabase.supabase_client_request(
+        f"dim_servers?full_name=eq.{target['name']}",
+        method="PATCH",
+        data={"status": "offline"}
+    )
+
     if graceful_success:
         return 200, {
             "message": f"Shutdown für {target['name']} eingeleitet",
@@ -76,7 +92,77 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
             "target": target,
             "mode": "direct"
         }
-    
+
+def handle_server_create(payload: dict) -> tuple[int, dict]:
+    """Erstellt ein Hetzner Volume und registriert den Server in dim_servers."""
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    raw_name = str(payload.get("server_name") or payload.get("name", "")).strip().lower().replace(" ", "_")
+    caller_id = payload.get("discord_user_id")
+    server_type = payload.get("server_type", "cpx32")
+    custom_subdomain = payload.get("custom_subdomain")
+    if custom_subdomain:
+        custom_subdomain = custom_subdomain.strip().lower()
+
+    if not raw_name or not re.match(r"^[a-z0-9_-]+$", raw_name):
+        return 400, {"error": "Servername darf nur Kleinbuchstaben, Zahlen, - und _ enthalten"}
+
+    # Prüfen auf Namens-Kollision
+    status_c, resp_c = supabase.supabase_client_request(f"dim_servers?server_name=eq.{raw_name}&status=neq.deleted", method="GET")
+    if status_c == 200 and json.loads(resp_c):
+        return 400, {"error": f"Ein aktiver Server mit dem Namen '{raw_name}' existiert bereits."}
+
+    # Volume bei Hetzner erstellen
+    volume_name = f"vol-{game}-{raw_name}"[:32]
+    vol = hetzner.create_volume(name=volume_name, size_gb=20, location="nbg1")
+    volume_id = vol.get("id")
+    if not volume_id:
+        return 500, {"error": "Hetzner Volume konnte nicht angelegt werden"}
+
+    server_entry = {
+        "game": game,
+        "server_name": raw_name,
+        "custom_subdomain": custom_subdomain,
+        "hetzner_volume_id": volume_id,
+        "hetzner_server_type": server_type,
+        "status": "offline",
+        "created_by": caller_id
+    }
+    status_sb, resp_sb = supabase.supabase_client_request("dim_servers", method="POST", data=server_entry)
+    if status_sb not in [200, 201]:
+        hetzner.delete_volume(volume_id)
+        return status_sb, {"error": f"Fehler in dim_servers: {resp_sb}"}
+
+    return 201, {"message": f"Server '{raw_name}' erfolgreich erstellt", "server": json.loads(resp_sb)[0]}
+
+def handle_server_delete(payload: dict) -> tuple[int, dict]:
+    """Löscht Volume bei Hetzner, DNS-Record und markiert Server als deleted."""
+    raw_name = str(payload.get("server_name") or payload.get("name", "")).strip().lower()
+    caller_id = payload.get("discord_user_id")
+
+    status_s, resp_s = supabase.supabase_client_request(f"dim_servers?server_name=eq.{raw_name}&status=neq.deleted", method="GET")
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{raw_name}' nicht gefunden"}
+
+    srv = json.loads(resp_s)[0]
+
+    if srv["server_name"] == "default":
+        status_u, resp_u = supabase.supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
+        user_role = json.loads(resp_u)[0].get("role") if status_u == 200 and json.loads(resp_u) else "user"
+        if user_role != "superadmin":
+            return 403, {"error": "Nur der Superadmin darf den Default-Server löschen."}
+
+    hetzner.delete_volume(srv["hetzner_volume_id"])
+    if srv.get("subdomain"):
+        dns.delete_godaddy_dns(srv["subdomain"])
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    supabase.supabase_client_request(
+        f"dim_servers?server_id=eq.{srv['server_id']}",
+        method="PATCH",
+        data={"status": "deleted", "deleted_at": now_iso}
+    )
+    return 200, {"message": f"Server '{srv['display_name']}' gelöscht"}
+
 def handle_log(payload: dict) -> tuple[int, dict]:
     servers = hetzner.list_servers()
     if not servers:
@@ -143,9 +229,9 @@ def handle_cash(payload: dict) -> tuple[int, dict]:
     amount_target = round(amount_orig * fx_rate, 2)
     payment_data = {
         "discord_user_id": target_uid,
-        "amount": amount_target,             # Betrag in Systemwährung (EUR)
-        "currency": target_currency,         # Standard: EUR
-        "payment_amount": amount_orig,       # Erhaltene Originalwährung
+        "amount": amount_target,
+        "currency": target_currency,
+        "payment_amount": amount_orig,
         "payment_currency": currency,
         "exchange_rate": fx_rate,
         "exchange_rate_id": rate_id,
@@ -173,14 +259,12 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
     mojang_uuid = None
     username = raw_username
 
-    # Mojang-Validierung für Minecraft
     if game == "minecraft":
         mojang_uuid, official_name = mojang.get_mojang_profile(raw_username)
         if not mojang_uuid:
             return 404, {"error": f"Minecraft-Account `{raw_username}` existiert nicht bei Mojang."}
-        username = official_name  # Exakte Groß-/Kleinschreibung von Mojang übernehmen
+        username = official_name
 
-    # User in dim_users registrieren/aktualisieren
     supabase.supabase_client_request(
         "dim_users",
         method="POST",
@@ -188,7 +272,6 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
         headers_extra={"Prefer": "resolution=merge-duplicates"}
     )
 
-    # Prüfen, ob der Ingame-Account bereits registriert ist
     endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id,mojang_uuid"
     status_check, resp_check = supabase.supabase_client_request(endpoint_check, method="GET")
     existing_accounts = json.loads(resp_check) if status_check == 200 else []
@@ -196,7 +279,6 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
     if existing_accounts:
         owner_id = str(existing_accounts[0].get("discord_user_id"))
         if owner_id == discord_user_id:
-            # Falls UUID bisher fehlte, nachträglich updaten
             if mojang_uuid and not existing_accounts[0].get("mojang_uuid"):
                 supabase.supabase_client_request(
                     f"dim_game_accounts?discord_user_id=eq.{discord_user_id}&game=eq.{game}&ingame_username=ilike.{username}",
@@ -211,7 +293,6 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
             }
         return 403, {"status": "forbidden", "game": game, "username": username}
 
-    # Neu anlegen mit mojang_uuid
     account_payload = {
         "discord_user_id": discord_user_id,
         "game": game,
@@ -249,12 +330,19 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
     raw_path = path or "/"
     action = body.get("action")
 
-    if raw_path.endswith("/start") or action == "start":
+    # Multi-Server Endpunkte
+    if raw_path.endswith("/server/start") or raw_path.endswith("/start") or action == "start":
         return handle_start(body)
+    if raw_path.endswith("/server/stop") or raw_path.endswith("/stop") or action == "stop":
+        return handle_stop(body)
+    if raw_path.endswith("/server/create") or action == "server_create":
+        return handle_server_create(body)
+    if raw_path.endswith("/server/delete") or action == "server_delete":
+        return handle_server_delete(body)
     if raw_path.endswith("/servers") or action == "list":
         return handle_servers()
-    if raw_path.endswith("/stop") or action == "stop":
-        return handle_stop(body)
+
+    # Log & Finanzen
     if raw_path.endswith("/log") or action == "log":
         return handle_log(body)
     if raw_path.endswith("/costs"):
@@ -265,8 +353,12 @@ def route_request(path: str, body: dict) -> tuple[int, dict]:
         return handle_cash(body)
     if raw_path.endswith("/exchange-rate") or action == "exchange_rate":
         return handle_exchange_rate(body)
+
+    # Game Accounts
     if raw_path.endswith("/addgameaccount") or action == "addgameaccount":
         return handle_addgameaccount(body)
+
+    # DNS
     if raw_path.endswith("/dns/sync") or action == "dns_sync":
         return handle_dns_sync(body)
     if raw_path.endswith("/dns/records") or action == "dns_records":
