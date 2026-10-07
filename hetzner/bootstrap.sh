@@ -200,36 +200,55 @@ systemctl enable --now gameserver-guard.service
 
 echo "[BOOTSTRAP] Alle 4 Services gestartet!"
 
-# 7. Whitelist & OPs vorab aus Supabase ziehen
+# 7. Single Source of Truth: Whitelist & OPs vollständig aus Supabase ziehen
 if [ -n "$SERVER_ID" ] && [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
-    echo "[BOOTSTRAP] Erstelle whitelist.json und ops.json aus Supabase..."
-    WL_JSON=$(curl -fsSL \
+    echo "[BOOTSTRAP] Synchronisiere Whitelist & OPs aus Supabase für Server $SERVER_ID..."
+    mkdir -p "$MOUNT_DIR/data"
+    rm -f "$MOUNT_DIR/data/whitelist.json" "$MOUNT_DIR/data/ops.json"
+
+    curl -fsSL \
         -H "apikey: $SUPABASE_KEY" \
         -H "Authorization: Bearer $SUPABASE_KEY" \
-        "$SUPABASE_URL/rest/v1/map_server_whitelist?server_id=eq.$SERVER_ID&select=role,dim_game_accounts(ingame_username,mojang_uuid)" 2>/dev/null || echo "[]")
-
-    mkdir -p "$MOUNT_DIR/data"
+        "$SUPABASE_URL/rest/v1/map_server_whitelist?server_id=eq.$SERVER_ID&select=role,dim_game_accounts(ingame_username,mojang_uuid)" 2>/dev/null | \
     python3 -c "
-import json
+import sys, json
+
 try:
-    data = json.loads('''$WL_JSON''')
+    raw = sys.stdin.read().strip()
+    data = json.loads(raw) if raw else []
     whitelist = []
     ops = []
     for entry in data:
         acc = entry.get('dim_game_accounts') or {}
+        if isinstance(acc, list) and acc:
+            acc = acc[0]
+
         uuid = acc.get('mojang_uuid')
         name = acc.get('ingame_username')
+
         if uuid and name:
-            whitelist.append({'uuid': uuid, 'name': name})
-            if entry.get('role') == 'server-admin':
-                ops.append({'uuid': uuid, 'name': name, 'level': 4, 'bypassesPlayerLimit': False})
-    with open('$MOUNT_DIR/data/whitelist.json', 'w') as f:
+            whitelist.append({
+                'uuid': str(uuid),
+                'name': str(name)
+            })
+            if entry.get('role') in ['server-admin', 'admin']:
+                ops.append({
+                    'uuid': str(uuid),
+                    'name': str(name),
+                    'level': 4,
+                    'bypassesPlayerLimit': False
+                })
+
+    with open('$MOUNT_DIR/data/whitelist.json', 'w', encoding='utf-8') as f:
         json.dump(whitelist, f, indent=2)
-    with open('$MOUNT_DIR/data/ops.json', 'w') as f:
+
+    with open('$MOUNT_DIR/data/ops.json', 'w', encoding='utf-8') as f:
         json.dump(ops, f, indent=2)
+
+    print(f'[BOOTSTRAP] Whitelist synchronisiert: {len(whitelist)} Spieler, {len(ops)} Admins.')
 except Exception as e:
-    print(f'[BOOTSTRAP WARNING] Whitelist Generierung Fehler: {e}')
-" || echo "[BOOTSTRAP] Whitelist-Generierung übersprungen"
+    print(f'[BOOTSTRAP FEHLER] Whitelist-Generierung fehlgeschlagen: {e}')
+"
 fi
 
 # 8. Spielcontainer prüfen, bei Bedarf initialisieren und starten

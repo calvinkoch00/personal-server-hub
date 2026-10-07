@@ -121,7 +121,7 @@
       {
         "type": 1,
         "name": "add",
-        "description": "Fügt einen Spieler zur Whitelist hinzu",
+        "description": "Fügt einen Spieler zur Whitelist hinzu oder passt die Rolle an",
         "options": [
           {
             "type": 3,
@@ -132,13 +132,13 @@
           {
             "type": 3,
             "name": "server",
-            "description": "Servername (Standard: default)",
-            "required": false
+            "description": "Servername / Slug (z. B. skyblock oder minecraft-default)",
+            "required": true
           },
           {
             "type": 3,
             "name": "role",
-            "description": "Rolle auf dem Server",
+            "description": "Rolle auf dem Server (Standard: player)",
             "required": false,
             "choices": [
               {"name": "Spieler (player)", "value": "player"},
@@ -161,8 +161,8 @@
           {
             "type": 3,
             "name": "server",
-            "description": "Servername (Standard: default)",
-            "required": false
+            "description": "Servername / Slug",
+            "required": true
           }
         ]
       },
@@ -174,8 +174,8 @@
           {
             "type": 3,
             "name": "server",
-            "description": "Servername (Standard: default)",
-            "required": false
+            "description": "Servername / Slug",
+            "required": true
           }
         ]
       }

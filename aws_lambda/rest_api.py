@@ -467,10 +467,10 @@ def handle_dns_records(payload: dict) -> tuple[int, dict]:
 
 def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    server_slug = resolve_server_slug(payload.get("server_name") or payload.get("server_slug") or payload.get("server"), game=game)
+    server_slug = resolve_server_slug(payload.get("server") or payload.get("server_name") or payload.get("server_slug"), game=game)
     raw_user = str(payload.get("username", "")).strip()
     caller_id = str(payload.get("discord_user_id", ""))
-    target_role = "server-admin" if payload.get("role") == "server-admin" else "player"
+    target_role = "server-admin" if payload.get("role") in ["server-admin", "admin"] else "player"
 
     if not raw_user:
         return 400, {"error": "Parameter 'username' fehlt"}
@@ -507,19 +507,36 @@ def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
         if acc_discord_id != caller_id:
             return 403, {"error": "Du kannst dich bei dieser Policy nur selbst hinzufügen."}
 
-    wl_payload = {
-        "server_id": srv_id,
-        "account_id": acc_id,
-        "discord_user_id": acc_discord_id,
-        "role": target_role
-    }
-    status_w, resp_w = supabase.supabase_client_request(
-        "map_server_whitelist",
-        method="POST",
-        data=wl_payload,
-        headers_extra={"Prefer": "resolution=merge-duplicates,return=representation"}
+    # Bestehenden Eintrag prüfen (Upsert/Rollen-Update)
+    status_exist, resp_exist = supabase.supabase_client_request(
+        f"map_server_whitelist?server_id=eq.{srv_id}&account_id=eq.{acc_id}&select=id,role",
+        method="GET"
     )
-    if status_w not in [200, 201]:
+    existing_wl = json.loads(resp_exist) if status_exist == 200 else []
+
+    action_type = "added"
+    if existing_wl:
+        wl_id = existing_wl[0]["id"]
+        status_w, resp_w = supabase.supabase_client_request(
+            f"map_server_whitelist?id=eq.{wl_id}",
+            method="PATCH",
+            data={"role": target_role}
+        )
+        action_type = "updated"
+    else:
+        wl_payload = {
+            "server_id": srv_id,
+            "account_id": acc_id,
+            "discord_user_id": acc_discord_id,
+            "role": target_role
+        }
+        status_w, resp_w = supabase.supabase_client_request(
+            "map_server_whitelist",
+            method="POST",
+            data=wl_payload
+        )
+
+    if status_w not in [200, 201, 204]:
         return status_w, {"error": f"Fehler beim Speichern der Whitelist: {resp_w}"}
 
     live_synced = False
@@ -527,27 +544,14 @@ def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
     matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
 
     if matched_vm and matched_vm.get("ip"):
-        if srv.get("status") != "online":
-            supabase.supabase_client_request(
-                f"dim_servers?server_id=eq.{srv_id}",
-                method="PATCH",
-                data={"status": "online"}
-            )
         try:
             res_agent = agent.add_remote_whitelist(matched_vm["ip"], canonical_user, is_op=(target_role == "server-admin"))
             live_synced = res_agent.get("status") == "ok"
         except Exception as e:
             print(f"[WHITELIST SYNC ERROR] {e}")
-    else:
-        if srv.get("status") == "online":
-            supabase.supabase_client_request(
-                f"dim_servers?server_id=eq.{srv_id}",
-                method="PATCH",
-                data={"status": "offline"}
-            )
 
     return 200, {
-        "status": "added",
+        "status": action_type,
         "username": canonical_user,
         "server": srv["display_name"],
         "role": target_role,
@@ -556,7 +560,7 @@ def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
 
 def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    server_slug = resolve_server_slug(payload.get("server_name") or payload.get("server_slug") or payload.get("server"), game=game)
+    server_slug = resolve_server_slug(payload.get("server") or payload.get("server_name") or payload.get("server_slug"), game=game)
     raw_user = str(payload.get("username", "")).strip()
     caller_id = str(payload.get("discord_user_id", ""))
 
@@ -596,24 +600,11 @@ def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
     matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
 
     if matched_vm and matched_vm.get("ip"):
-        if srv.get("status") != "online":
-            supabase.supabase_client_request(
-                f"dim_servers?server_id=eq.{srv_id}",
-                method="PATCH",
-                data={"status": "online"}
-            )
         try:
             res_agent = agent.remove_remote_whitelist(matched_vm["ip"], canonical_user)
             live_synced = res_agent.get("status") == "ok"
         except Exception as e:
             print(f"[WHITELIST SYNC ERROR] {e}")
-    else:
-        if srv.get("status") == "online":
-            supabase.supabase_client_request(
-                f"dim_servers?server_id=eq.{srv_id}",
-                method="PATCH",
-                data={"status": "offline"}
-            )
 
     return 200, {
         "status": "removed",
@@ -624,7 +615,7 @@ def handle_whitelist_remove(payload: dict) -> tuple[int, dict]:
 
 def handle_whitelist_list(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    server_slug = resolve_server_slug(payload.get("server_name") or payload.get("server_slug") or payload.get("server"), game=game)
+    server_slug = resolve_server_slug(payload.get("server") or payload.get("server_name") or payload.get("server_slug"), game=game)
 
     status_s, resp_s = supabase.supabase_client_request(
         f"dim_servers?game=eq.{game}&server_slug=eq.{server_slug}&status=neq.deleted", method="GET"

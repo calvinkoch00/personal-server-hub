@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import re
 import subprocess
 import requests
 from dotenv import load_dotenv
@@ -10,6 +11,87 @@ load_dotenv("/mnt/gamespeicher/secrets.env")
 STATUS_WEBHOOK = os.environ.get("DISCORD_STATUS_WEBHOOK_URL")
 LOG_WEBHOOK = os.environ.get("DISCORD_LOG_WEBHOOK_URL") or STATUS_WEBHOOK
 CONFIG_FILE = "/tmp/discord_log_mode"
+
+SERVER_ID = os.environ.get("SERVER_ID")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+WL_ADD_REGEX = re.compile(r"Added ([a-zA-Z0-9_]{3,16}) to the whitelist", re.IGNORECASE)
+WL_REM_REGEX = re.compile(r"Removed ([a-zA-Z0-9_]{3,16}) from the whitelist", re.IGNORECASE)
+OP_ADD_REGEX = re.compile(r"Made ([a-zA-Z0-9_]{3,16}) a server operator", re.IGNORECASE)
+OP_REM_REGEX = re.compile(r"Made ([a-zA-Z0-9_]{3,16}) no longer a server operator", re.IGNORECASE)
+
+def _supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+def get_account_id_by_username(username: str) -> tuple[str | None, str | None]:
+    """Sucht account_id und discord_user_id anhand des Ingame-Namens in Supabase."""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return None, None
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/dim_game_accounts?game=eq.minecraft&ingame_username=ilike.{username}&select=id,discord_user_id"
+    try:
+        r = requests.get(url, headers=_supabase_headers(), timeout=5)
+        if r.status_code == 200 and r.json():
+            row = r.json()[0]
+            return row.get("id"), str(row.get("discord_user_id"))
+    except Exception as e:
+        print(f"[LOG_STREAMER] Account Lookup Fehler: {e}", flush=True)
+    return None, None
+
+def sync_ingame_whitelist_event(line: str):
+    """Spiegelt Ingame Whitelist- und OP-Befehle direkt nach Supabase zurück."""
+    if not (SERVER_ID and SUPABASE_URL and SUPABASE_KEY):
+        return
+
+    m_add = WL_ADD_REGEX.search(line)
+    if m_add:
+        player = m_add.group(1)
+        acc_id, disc_id = get_account_id_by_username(player)
+        if acc_id:
+            payload = {
+                "server_id": SERVER_ID,
+                "account_id": acc_id,
+                "discord_user_id": disc_id,
+                "role": "player"
+            }
+            url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/map_server_whitelist"
+            requests.post(url, headers=_supabase_headers(), json=payload, timeout=5)
+            print(f"[SYNC] Ingame Whitelist Add: {player} synchronisiert.", flush=True)
+        return
+
+    m_rem = WL_REM_REGEX.search(line)
+    if m_rem:
+        player = m_rem.group(1)
+        acc_id, _ = get_account_id_by_username(player)
+        if acc_id:
+            url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/map_server_whitelist?server_id=eq.{SERVER_ID}&account_id=eq.{acc_id}"
+            requests.delete(url, headers=_supabase_headers(), timeout=5)
+            print(f"[SYNC] Ingame Whitelist Remove: {player} synchronisiert.", flush=True)
+        return
+
+    m_op_add = OP_ADD_REGEX.search(line)
+    if m_op_add:
+        player = m_op_add.group(1)
+        acc_id, _ = get_account_id_by_username(player)
+        if acc_id:
+            url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/map_server_whitelist?server_id=eq.{SERVER_ID}&account_id=eq.{acc_id}"
+            requests.patch(url, headers=_supabase_headers(), json={"role": "server-admin"}, timeout=5)
+            print(f"[SYNC] Ingame OP Granted: {player} -> server-admin synchronisiert.", flush=True)
+        return
+
+    m_op_rem = OP_REM_REGEX.search(line)
+    if m_op_rem:
+        player = m_op_rem.group(1)
+        acc_id, _ = get_account_id_by_username(player)
+        if acc_id:
+            url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/map_server_whitelist?server_id=eq.{SERVER_ID}&account_id=eq.{acc_id}"
+            requests.patch(url, headers=_supabase_headers(), json={"role": "player"}, timeout=5)
+            print(f"[SYNC] Ingame OP Revoked: {player} -> player synchronisiert.", flush=True)
+        return
 
 
 def get_log_mode() -> str:
@@ -52,9 +134,6 @@ def stream_logs():
     while True:
         time.sleep(8)
         mode = get_log_mode()
-        if mode == "off":
-            last_check = time.time()
-            continue
 
         lines_to_send = []
         now = time.time()
@@ -70,11 +149,17 @@ def stream_logs():
                     capture_output=True,
                     text=True
                 )
-                out = (res.stdout + res.stderr).strip()
-                if out:
-                    lines_to_send.extend([f"[GAME] {l}" for l in out.splitlines()])
+                raw_out = (res.stdout + res.stderr).strip()
+                if raw_out:
+                    for line in raw_out.splitlines():
+                        sync_ingame_whitelist_event(line)
+                        if mode != "off":
+                            lines_to_send.append(f"[GAME] {line}")
         except Exception:
             pass
+
+        if mode == "off":
+            continue
 
         # 2. System- & Service-Logs (nur bei mode == 'all')
         if mode == "all":
@@ -91,7 +176,6 @@ def stream_logs():
                 pass
 
         if lines_to_send:
-            # Auf maximal 15 Zeilen pro Batch und 1800 Zeichen begrenzen
             recent = lines_to_send[-15:]
             chunk = "\n".join(recent)
             if len(chunk) > 1800:

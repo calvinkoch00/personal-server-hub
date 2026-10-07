@@ -147,45 +147,49 @@ def handle_whitelist(subcommand: str, sub_options: dict, caller_id: str) -> str:
     role = str(sub_options.get("role", "player")).strip()
 
     if subcommand == "add":
-        status, resp = rest_api.handle_whitelist_add({
-            "server_name": server_name,
+        payload = {
+            "server": server_name,
             "username": user,
             "discord_user_id": caller_id,
             "role": role
-        })
-        if status == 200:
-            sync_txt = " (Live auf laufendem Server aktiv!)" if resp.get("live_synced") else " (aktiviert bei nächstem Serverstart)"
-            return f"✅ Spieler `{resp['username']}` wurde als `{resp['role']}` zur Whitelist von `{resp['server']}` hinzugefügt!{sync_txt}"
-        return f"❌ {resp.get('error')}"
+        }
+        status, resp = rest_api.handle_whitelist_add(payload)
+        if status != 200:
+            return f"❌ {resp.get('error')}"
+
+        action_txt = "angepasst" if resp.get("status") == "updated" else "hinzugefügt"
+        sync_txt = " (Live auf laufendem Server aktiv!)" if resp.get("live_synced") else " (aktiviert bei nächstem Serverstart)"
+        return f"✅ Spieler `{resp.get('username')}` wurde als `{resp.get('role')}` auf `{resp.get('server')}` {action_txt}!{sync_txt}"
 
     elif subcommand == "remove":
-        status, resp = rest_api.handle_whitelist_remove({
-            "server_name": server_name,
+        payload = {
+            "server": server_name,
             "username": user,
             "discord_user_id": caller_id
-        })
-        if status == 200:
-            sync_txt = " (Live vom laufenden Server entfernt!)" if resp.get("live_synced") else ""
-            return f"🗑️ Spieler `{resp['username']}` wurde von der Whitelist von `{resp['server']}` entfernt.{sync_txt}"
-        return f"❌ {resp.get('error')}"
+        }
+        status, resp = rest_api.handle_whitelist_remove(payload)
+        if status != 200:
+            return f"❌ {resp.get('error')}"
+        sync_txt = " (Live vom laufenden Server entfernt!)" if resp.get("live_synced") else ""
+        return f"🗑️ Spieler `{resp.get('username')}` wurde von `{resp.get('server')}` entfernt.{sync_txt}"
 
     elif subcommand == "list":
-        status, resp = rest_api.handle_whitelist_list({
-            "server_name": server_name
-        })
-        if status == 200:
-            entries = resp.get("entries", [])
-            if not entries:
-                return f"ℹ️ Keine Whitelist-Einträge für Server `{resp['server']}` vorhanden (Policy: `{resp.get('policy')}`)."
+        payload = {"server": server_name}
+        status, resp = rest_api.handle_whitelist_list(payload)
+        if status != 200:
+            return f"❌ {resp.get('error')}"
 
-            lines = []
-            for e in entries:
-                acc = e.get("dim_game_accounts") or {}
-                name = acc.get("ingame_username", "Unknown")
-                r = e.get("role", "player")
-                icon = "👑" if r == "server-admin" else "👤"
-                lines.append(f"• {icon} `{name}` ({r})")
-            return f"📋 **Whitelist für `{resp['server']}`:**\n" + "\n".join(lines)
-        return f"❌ {resp.get('error')}"
+        entries = resp.get("entries", [])
+        if not entries:
+            return f"ℹ️ Keine Whitelist-Einträge für Server `{resp.get('server')}` vorhanden (Policy: `{resp.get('policy')}`)."
+
+        lines = []
+        for e in entries:
+            acc = e.get("dim_game_accounts") or {}
+            name = acc.get("ingame_username", "Unknown")
+            r = e.get("role", "player")
+            icon = "👑" if r == "server-admin" else "👤"
+            lines.append(f"• {icon} `{name}` ({r})")
+        return f"📋 **Whitelist für `{resp.get('server')}`:**\n" + "\n".join(lines)
 
     return "❌ Unbekannter Whitelist-Befehl"
