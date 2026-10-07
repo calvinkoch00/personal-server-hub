@@ -10,7 +10,7 @@
 • `/whitelist remove <username> [server]` — Entfernt einen Spieler von der Whitelist
 • `/whitelist list [server]` — Zeigt alle gewhitelisteten Spieler eines Servers
 • `/status` — Zeigt alle aktiven Server samt IP an
-• `/log <mode>` — Schaltet Live-Server-Logs im laufenden Betrieb um
+• `/log <mode> [server]` — Schaltet Live-Server-Logs im laufenden Betrieb um
 • `/stop` — Stoppt und löscht den aktuell laufenden Server
 • `/costs [timeframe] [user]` — Zeigt die Kosten und Spielzeiten an
 • `/account [user]` — Zeigt das Guthaben bzw. den Kontostand an
