@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from services import hetzner, agent, supabase, fx, dns
+from services import hetzner, agent, supabase, fx, dns, mojang
 
 def handle_start(payload: dict) -> tuple[int, dict]:
     game = payload.get("game", "minecraft").strip().lower()
@@ -165,11 +165,22 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
     discord_user_id = str(payload.get("discord_user_id"))
     discord_username = str(payload.get("discord_username", "Unknown"))
     game = str(payload.get("game", "")).strip().lower()
-    username = str(payload.get("username", "")).strip()
+    raw_username = str(payload.get("username", "")).strip()
 
-    if not game or not username:
+    if not game or not raw_username:
         return 400, {"error": "Felder 'game' und 'username' sind erforderlich"}
 
+    mojang_uuid = None
+    username = raw_username
+
+    # Mojang-Validierung für Minecraft
+    if game == "minecraft":
+        mojang_uuid, official_name = mojang.get_mojang_profile(raw_username)
+        if not mojang_uuid:
+            return 404, {"error": f"Minecraft-Account `{raw_username}` existiert nicht bei Mojang."}
+        username = official_name  # Exakte Groß-/Kleinschreibung von Mojang übernehmen
+
+    # User in dim_users registrieren/aktualisieren
     supabase.supabase_client_request(
         "dim_users",
         method="POST",
@@ -177,28 +188,49 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
         headers_extra={"Prefer": "resolution=merge-duplicates"}
     )
 
-    endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id"
+    # Prüfen, ob der Ingame-Account bereits registriert ist
+    endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id,mojang_uuid"
     status_check, resp_check = supabase.supabase_client_request(endpoint_check, method="GET")
     existing_accounts = json.loads(resp_check) if status_check == 200 else []
 
     if existing_accounts:
         owner_id = str(existing_accounts[0].get("discord_user_id"))
         if owner_id == discord_user_id:
-            return 200, {"status": "already_linked_self", "game": game, "username": username}
+            # Falls UUID bisher fehlte, nachträglich updaten
+            if mojang_uuid and not existing_accounts[0].get("mojang_uuid"):
+                supabase.supabase_client_request(
+                    f"dim_game_accounts?discord_user_id=eq.{discord_user_id}&game=eq.{game}&ingame_username=ilike.{username}",
+                    method="PATCH",
+                    data={"mojang_uuid": mojang_uuid}
+                )
+            return 200, {
+                "status": "already_linked_self",
+                "game": game,
+                "username": username,
+                "mojang_uuid": mojang_uuid
+            }
         return 403, {"status": "forbidden", "game": game, "username": username}
 
+    # Neu anlegen mit mojang_uuid
+    account_payload = {
+        "discord_user_id": discord_user_id,
+        "game": game,
+        "ingame_username": username,
+        "mojang_uuid": mojang_uuid
+    }
     status_a, resp_a = supabase.supabase_client_request(
         "dim_game_accounts",
         method="POST",
-        data={
-            "discord_user_id": discord_user_id,
-            "game": game,
-            "ingame_username": username
-        },
+        data=account_payload,
         headers_extra={"Prefer": "return=representation"}
     )
     if status_a in [200, 201]:
-        return 200, {"status": "created", "game": game, "username": username}
+        return 200, {
+            "status": "created",
+            "game": game,
+            "username": username,
+            "mojang_uuid": mojang_uuid
+        }
     return status_a, {"error": f"Fehler beim Verknüpfen ({status_a}): {resp_a}"}
 
 def handle_dns_sync(payload: dict) -> tuple[int, dict]:
