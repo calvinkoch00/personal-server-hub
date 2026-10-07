@@ -96,21 +96,25 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         if not target:
             return 404, {"error": f"Kein laufender Server mit Namen oder ID '{raw_identifier}' gefunden."}
     else:
+        # Kein Parameter übergeben -> erster aktiver Server
         target = servers[0]
 
     target_ip = target.get("ip")
     target_id = str(target.get("server_id"))
 
-    # 1. Server in Supabase finden
-    # Robuste Suche in Supabase: erst nach full_name, sonst nach server_slug
+    # Initialisierung der Variablen gegen Scope-Warnungen
+    subdomains_to_reset = set()
+    srv_id = None
+
+    # 1. Server in Supabase suchen (Prio 1: full_name)
     status_srv, resp_srv = supabase.supabase_client_request(
         f"dim_servers?full_name=eq.{target['name']}&status=neq.deleted",
         method="GET"
     )
     db_servers = json.loads(resp_srv) if status_srv == 200 else []
 
+    # Fallback: Suche nach Slug aus dem Instanznamen (z. B. 'skyblock' aus 'server-minecraft-skyblock')
     if not db_servers:
-        # Fallback über Slug (aus 'server-minecraft-skyblock' -> 'skyblock')
         slug_guess = target['name'].replace("server-minecraft-", "").replace("server-", "")
         status_srv, resp_srv = supabase.supabase_client_request(
             f"dim_servers?server_slug=eq.{slug_guess}&status=neq.deleted",
@@ -119,14 +123,17 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         db_servers = json.loads(resp_srv) if status_srv == 200 else []
 
     if db_servers:
-        srv_id = db_servers[0].get("server_id")
+        srv_row = db_servers[0]
+        srv_id = srv_row.get("server_id")
+
+        # Status auf offline setzen
         supabase.supabase_client_request(
             f"dim_servers?server_id=eq.{srv_id}",
             method="PATCH",
             data={"status": "offline"}
         )
 
-        # 1. Prio: Verknüpfte Records über server_id
+        # 1. Prio für DNS: Verknüpfte Records über server_id
         status_dns, resp_dns = supabase.supabase_client_request(
             f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain",
             method="GET"
@@ -136,7 +143,7 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
                 if d.get("subdomain"):
                     subdomains_to_reset.add(d["subdomain"])
 
-    # 2. Prio: Alle DNS-Records finden, die aktuell auf die target_ip dieses Servers zeigen
+    # 2. Prio für DNS: Alle DNS-Records finden, die aktuell auf die target_ip zeigen
     if target_ip:
         status_ip_dns, resp_ip_dns = supabase.supabase_client_request(
             f"dim_dns_records?record_value=eq.{target_ip}&select=subdomain",
@@ -147,7 +154,7 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
                 if d.get("subdomain"):
                     subdomains_to_reset.add(d["subdomain"])
 
-    # Fallback, falls gar nichts gefunden wurde
+    # Fallback für DNS, falls nichts in der Datenbank gefunden wurde
     if not subdomains_to_reset:
         slug = db_servers[0].get("server_slug", "") if db_servers else ""
         if slug in ["minecraft-default", "default"]:
@@ -155,7 +162,7 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         elif slug:
             subdomains_to_reset.add(slug)
 
-    # Alle ermittelten Subdomains auf 0.0.0.0 setzen
+    # Alle ermittelten Subdomains sauber auf 0.0.0.0 zurücksetzen
     for sub in subdomains_to_reset:
         dns.update_godaddy_dns("0.0.0.0", subdomain=sub, server_id=srv_id)
 
