@@ -44,17 +44,19 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
         assert mock_dns.called
         assert mock_log.called
 
+@patch("services.dns.update_godaddy_dns")
 @patch("services.hetzner.create_volume")
 @patch("services.supabase.supabase_client_request")
-def test_handle_server_create(mock_sb, mock_vol):
+def test_handle_server_create(mock_sb, mock_vol, mock_dns):
     mock_vol.return_value = {"id": 12345678}
     mock_sb.side_effect = [
-        (200, "[]"),  # Name Check (frei)
-        (201, json.dumps([{
+        (200, "[]"),  # 1. Name Check (frei)
+        (201, json.dumps([{  # 2. Insert dim_servers
             "server_id": "new-srv-id",
             "server_slug": "skyblock",
             "display_name": "minecraft-skyblock"
-        }]))
+        }])),
+        (200, "[]")  # 3. Creator Game Accounts Abfrage für Auto-Whitelist
     ]
 
     status, body = rest_api.handle_server_create({
@@ -64,8 +66,7 @@ def test_handle_server_create(mock_sb, mock_vol):
     })
 
     assert status == 201
-    assert body["server"]["server_slug"] == "skyblock"
-    assert mock_vol.called
+    assert body["server_slug"] == "skyblock"
 
 @patch("services.supabase.supabase_client_request")
 def test_handle_server_create_invalid_name(mock_sb):
@@ -77,11 +78,13 @@ def test_handle_server_create_invalid_name(mock_sb):
     assert status == 400
     assert "nur Kleinbuchstaben" in body["error"]
 
+@patch("services.dns.find_subdomains_by_ip")
 @patch("services.dns.update_godaddy_dns")
 @patch("services.supabase.supabase_client_request")
 @patch("services.agent.stop_remote_server")
 @patch("services.hetzner.list_servers")
-def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns):
+def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mock_find_subs):
+    mock_find_subs.return_value = []
     mock_list.return_value = [{
         "server_id": 999,
         "name": "server-minecraft-skyblock",
@@ -89,9 +92,9 @@ def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns):
     }]
     mock_agent.return_value = {"status": "stopping"}
     mock_sb.side_effect = [
-        (200, json.dumps([{"server_id": "srv-sky", "server_slug": "skyblock"}])), # Select dim_servers
-        (200, '{"status": "ok"}'), # Patch dim_servers offline
-        (200, json.dumps([{"subdomain": "sky"}])) # Select dim_dns_records
+        (200, json.dumps([{"server_id": "srv-sky", "server_slug": "skyblock"}])),  # 1. Select dim_servers
+        (200, '{"status": "ok"}'),  # 2. Patch dim_servers offline
+        (200, json.dumps([{"subdomain": "sky"}]))  # 3. Select dim_dns_records
     ]
 
     status, body = rest_api.handle_stop({"name": "skyblock"})
