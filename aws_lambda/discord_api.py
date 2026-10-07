@@ -1,5 +1,30 @@
+import os
+import json
+import urllib.request
 import rest_api
 from commands import server, finance, accounts
+
+DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
+
+def send_followup(token: str, content: str | dict, app_id: str | None = None):
+    resolved_app_id = app_id or DISCORD_APP_ID
+    if not resolved_app_id or not token:
+        return
+
+    url = f"https://discord.com/api/v10/webhooks/{resolved_app_id}/{token}/messages/@original"
+    payload = content if isinstance(content, dict) else {"content": str(content)}
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PATCH"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10.0):
+            pass
+    except Exception as e:
+        print(f"[DISCORD FOLLOWUP ERROR] {e}")
 
 def handle_interaction(body: dict) -> dict:
     interaction_type = body.get("type")
@@ -8,6 +33,8 @@ def handle_interaction(body: dict) -> dict:
     if interaction_type == 1:
         return {"statusCode": 200, "body": {"type": 1}}
 
+    interaction_token = body.get("token")
+    app_id = body.get("application_id") or DISCORD_APP_ID
     caller_data = body.get("member", {}).get("user") or body.get("user", {})
     caller_id = str(caller_data.get("id"))
     caller_name = str(caller_data.get("username", "Admin"))
@@ -26,7 +53,7 @@ def handle_interaction(body: dict) -> dict:
             return {
                 "statusCode": 200,
                 "body": {
-                    "type": 7,  # Aktualisiert die bestehende Nachricht
+                    "type": 7,
                     "data": {"content": "❌ Löschvorgang abgebrochen. Es wurden keine Daten gelöscht.", "components": []}
                 }
             }
@@ -51,7 +78,7 @@ def handle_interaction(body: dict) -> dict:
             return {
                 "statusCode": 200,
                 "body": {
-                    "type": 7,  # Löscht die Buttons und zeigt das finale Ergebnis
+                    "type": 7,
                     "data": {"content": f"🗑️ {msg}", "components": []}
                 }
             }
@@ -70,7 +97,24 @@ def handle_interaction(body: dict) -> dict:
         subcommand = options_list[0].get("name")
         sub_options = {o["name"]: o.get("value") for o in options_list[0].get("options", [])}
 
-    # Commands auswerten
+    # Zeitaufwendige Server-Befehle via Background-Followup ausführen
+    if command == "server" and subcommand in ["start", "stop", "reload-files", "create"]:
+        if subcommand == "start":
+            res = server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})
+        elif subcommand == "stop":
+            res = server.handle_stop({"name": sub_options.get("name")})
+        elif subcommand == "reload-files":
+            res = server.handle_reload_files(sub_options)
+        elif subcommand == "create":
+            res = server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)
+
+        send_followup(interaction_token, res, app_id)
+        return {
+            "statusCode": 200,
+            "body": {"type": 5}  # Deferred Response ("Bot denkt nach...")
+        }
+
+    # Sofortige Befehle
     response_data = None
 
     if command == "help":
@@ -78,18 +122,9 @@ def handle_interaction(body: dict) -> dict:
     elif command == "status":
         response_data = {"content": server.handle_status()}
     elif command == "server":
-        if subcommand == "start":
-            response_data = {"content": server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})}
-        elif subcommand == "stop":
-            response_data = {"content": server.handle_stop({"name": sub_options.get("name")})}
-        elif subcommand == "reload-files":
-            response_data = {"content": server.handle_reload_files(sub_options)}
-        elif subcommand == "status":
+        if subcommand == "status":
             response_data = {"content": server.handle_status()}
-        elif subcommand == "create":
-            response_data = {"content": server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)}
         elif subcommand == "delete":
-            # Liefert dict mit Buttons zurück
             del_result = server.handle_delete(sub_options, caller_id)
             response_data = del_result if isinstance(del_result, dict) else {"content": str(del_result)}
         else:
