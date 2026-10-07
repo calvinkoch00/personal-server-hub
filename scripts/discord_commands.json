@@ -199,6 +199,12 @@
           {"name": "Nur Game Logs", "value": "game"},
           {"name": "Deaktivieren", "value": "off"}
         ]
+      },
+      {
+        "type": 3,
+        "name": "server",
+        "description": "Servername (Standard: default)",
+        "required": false
       }
     ]
   },

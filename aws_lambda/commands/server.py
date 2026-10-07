@@ -115,12 +115,14 @@ def handle_delete(data: dict, caller_id: str) -> str:
 def handle_log(data: dict) -> str:
     options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
     mode = str(options.get("mode", "game")).strip().lower()
+    server_param = str(options.get("server") or options.get("name") or "default").strip()
 
-    status, resp = rest_api.handle_log({"mode": mode})
-    if status == 400:
-        return "⚪ Kein aktiver Server online."
+    status, resp = rest_api.handle_log({"mode": mode, "server_name": server_param})
     if status != 200:
         return f"⚠ {resp.get('error')}"
 
-    cur_mode = resp.get("mode", mode)
-    return f"📡 **Live-Logs wurden umgestellt auf: `{cur_mode.upper()}`**"
+    cur_mode = resp.get("mode", mode).upper()
+    srv_name = resp.get("server", server_param)
+    sync_txt = " (Live auf Server umgestellt!)" if resp.get("live_synced") else " (gespeichert für nächsten Serverstart)"
+    
+    return f"📡 **Live-Logs für `{srv_name}` wurden umgestellt auf: `{cur_mode}`**{sync_txt}"

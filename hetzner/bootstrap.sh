@@ -48,10 +48,21 @@ pip3 install --break-system-packages requests python-dotenv
 
 # Log-Modus initial setzen (none, game, all)
 LOG_MODE="${ENABLE_LOGGING:-none}"
-if [ "$LOG_MODE" = "none" ] || [ "$LOG_MODE" = "false" ]; then
+if [ -n "${SERVER_ID:-}" ] && [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_KEY:-}" ]; then
+    echo "[BOOTSTRAP] Lade persistenten log_status aus Supabase für Server $SERVER_ID..."
+    FETCHED_MODE=$(curl -fsSL \
+        -H "apikey: $SUPABASE_KEY" \
+        -H "Authorization: Bearer $SUPABASE_KEY" \
+        "$SUPABASE_URL/rest/v1/dim_servers?server_id=eq.$SERVER_ID&select=log_status" | jq -r '.[0].log_status // empty' || echo "")
+    if [ -n "$FETCHED_MODE" ]; then
+        BOOT_LOG_MODE="$FETCHED_MODE"
+    fi
+fi
+
+if [ "$BOOT_LOG_MODE" = "none" ] || [ "$BOOT_LOG_MODE" = "off" ] || [ "$BOOT_LOG_MODE" = "false" ]; then
     echo "off" > /tmp/discord_log_mode
 else
-    echo "$LOG_MODE" > /tmp/discord_log_mode
+    echo "$BOOT_LOG_MODE" > /tmp/discord_log_mode
 fi
 
 # 5. Vier separate systemd Services erstellen
