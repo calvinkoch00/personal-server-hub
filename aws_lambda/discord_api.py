@@ -4,7 +4,8 @@ from commands import server, finance, accounts
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 
-def handle_interaction(body: dict) -> dict:
+
+def handle_interaction(body: dict, context=None) -> dict:
     interaction_type = body.get("type")
 
     # 1. Discord Ping/Pong (Muss in < 10ms beantwortet werden)

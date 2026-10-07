@@ -1,6 +1,16 @@
 import os
 import pytest
 
+@pytest.fixture(autouse=True)
+def set_test_env(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-central-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("DISCORD_APPLICATION_ID", "1234567890")
+
 # 1. Dummy-Umgebungsvariablen für die gesamte Test-Laufzeit setzen
 os.environ["AUTH_SECRET"] = "test-auth-secret"
 os.environ["HETZNER_API_TOKEN"] = "test-hetzner-token"
