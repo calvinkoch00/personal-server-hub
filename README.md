@@ -331,3 +331,292 @@ python scripts/register_discord_commands.py
 ```
 
 Das Registrierungsskript liest die `PUT /applications/{application_id}/commands`-Antwort und aktualisiert daraus `aws_lambda/commands_cache.txt`. Die Command-Definitionen kommen aus `scripts/discord_commands.json`.
+
+---
+
+# Teil II – API-Refactoring: Arbeitsplan und Entscheidungsprotokoll
+
+> **Status (2026-10-08):** Dieser Abschnitt ist das verbindliche Arbeitsdokument für das geplante Refactoring. Der bestehende Betrieb und die oben dokumentierten Befehle/Routen beschreiben den aktuellen Stand; die unten beschriebenen Zielarchitektur- und Migrationsschritte sind Plan, nicht bereits implementierter Code. Nach jedem Refactoring-Batch wird dieser Abschnitt aktualisiert: erledigte Schritte, geänderte Annahmen, offene Fragen und nötige Folgearbeiten.
+
+## Ziel und Leitlinien
+
+Das Projekt soll für externe Entwickler leichter zu verstehen und sicherer zu ändern sein. Die REST-API wird der fachliche Vertrag: Operationen, Request-/Response-Schemas, Validierung und Dokumentation werden zuerst definiert. Discord bleibt eine Schnittstelle dazu und enthält keine zweite Implementierung der Geschäftsregeln.
+
+Leitlinien:
+
+1. **API-Vertrag zuerst:** REST-Routen und typisierte Schemas definieren die unterstützten Operationen. Discord-Befehle werden aus diesen Definitionen abgeleitet und rufen dieselben Anwendungsoperationen auf.
+2. **Keine interne HTTP-Schleife:** Discord ruft innerhalb derselben Lambda-Anwendung nicht die eigene öffentliche REST-URL auf. REST- und Discord-Adapter teilen Anwendungslogik direkt; so gibt es keinen unnötigen Netzwerk-Hop oder doppelte Authentifizierung.
+3. **Schnittstellen bleiben getrennt:** Discord-Signaturprüfung, Deferred ACKs, Lambda-Worker und Webhook-Updates sind Discord-/AWS-Transportverhalten, nicht fachliche Serverlogik.
+4. **Provider bleiben austauschbare Integrationen:** Hetzner, Supabase, GoDaddy, Mojang und der VM-Agent werden hinter klaren Integrationsgrenzen angesprochen.
+5. **VM-Agent bleibt ein eigener Laufzeitbereich:** Die auf den Spielservern installierten Skripte sind kein Teil der Lambda-API und werden nur mit abgestimmten Änderungen an Bootstrap, Download-URLs, Dateipfaden, Imports und Systemd-Diensten verschoben.
+6. **Schrittweise und rückwärtsverträglich migrieren:** Bestehende Clients und REST-Pfade sollen nicht durch einen Struktur-Refactor unbeabsichtigt brechen.
+7. **Cloud-Integrationstests sind ausdrücklich opt-in:** Tests, die Ressourcen anlegen oder löschen, werden nicht als normale Unit-Tests oder automatisch in jedem PR ausgeführt.
+
+## Zielarchitektur (Vorschlag)
+
+Vorgeschlagene Bibliotheken: **FastAPI + Pydantic** für HTTP-Routen, Schemas und OpenAPI; **Mangum** als AWS-Lambda-Adapter. Vor der Migration wird anhand der tatsächlich konfigurierten Lambda-Eventform (Function URL/CloudFront-Origin) ein kleiner Adapter-Prototyp getestet. Falls Mangum den produktiven Eventpfad nicht zuverlässig abbildet, wird der Lambda-Adapter gezielt angepasst; Geschäftslogik bleibt unabhängig von diesem Entscheid.
+
+Vorgeschlagener Aufbau:
+
+```text
+src/personal_server_hub/
+├── lambda_handler.py             # AWS-Einstieg: HTTP-Adapter oder asynchroner Worker
+├── settings.py                   # Konfiguration und Validierung von Umgebungsvariablen
+├── api/
+│   ├── app.py                    # FastAPI-Anwendung, Middleware und Fehlerabbildung
+│   ├── dependencies.py           # Authentifizierung und gemeinsame Request-Abhängigkeiten
+│   ├── schemas/                  # Gemeinsame, typisierte Request-/Response-Schemas
+│   └── routes/
+│       ├── servers.py
+│       ├── whitelist.py
+│       ├── accounts.py
+│       ├── billing.py
+│       └── dns.py
+├── application/                  # Fachliche Use Cases, unabhängig von HTTP/Discord
+│   ├── servers.py
+│   ├── whitelist.py
+│   ├── accounts.py
+│   ├── billing.py
+│   └── dns.py
+├── domain/                       # Fachliche Typen, Regeln und synchronisierte Enum-Daten
+│   └── supabase_enums.json       # Generierter, pro Release aktualisierter Enum-Snapshot
+├── integrations/                 # Hetzner-, Supabase-, GoDaddy-, Mojang- und VM-Agent-Clients
+└── adapters/
+    └── discord/
+        ├── interactions.py       # Signaturprüfung, ACK, Worker- und Button-Lebenszyklus
+        ├── command_map.py        # Discord-Optionen → API-Operationen und Request-Schemas
+        └── responses.py          # Discord-Formatierung, Fortschritt und 2.000-Zeichen-Aufteilung
+
+vm_agent/                         # Optionaler neuer Repository-Ordner für die VM-Laufzeit
+├── bootstrap.sh
+├── control_api.py
+├── lifecycle_guard.py
+├── log_streamer.py
+└── session_tracker.py
+
+scripts/
+├── generate_discord_commands.py  # API-Definitionen → Discord-Registrierungspayload
+├── sync_supabase_enums.py        # Sichere Enum-Abfrage → JSON-Snapshot
+└── e2e/                          # Bewusst gestartete Live-Cloud-Tests
+
+tests/
+├── unit/
+│   ├── application/
+│   ├── api/
+│   ├── integrations/
+│   └── discord/
+└── integration/
+```
+
+Das ist ein Zielbild, kein Zwang, jeden Ordner sofort einzuführen. Die genaue Modulaufteilung wird während der Migration an den vorhandenen Use Cases ausgerichtet. Insbesondere wird `vm_agent/` erst verschoben, wenn alle Remote-Download- und Systemd-Pfade gleichzeitig angepasst und geprüft werden können.
+
+## Discord-Befehle aus den API-Definitionen erzeugen
+
+**Beschlossene Zielrichtung:** Die Discord-Registrierung soll nicht länger eine unabhängig gepflegte zweite Definition sein. Ein Generator soll die Discord-Payload aus derselben API-Operationsbeschreibung erzeugen, die REST-Schemas und OpenAPI speist. Die generierte Payload wird vor der Registrierung validiert; die Discord-`/help`-Übersicht bzw. ihr Cache wird ebenfalls aus dieser Quelle abgeleitet.
+
+OpenAPI allein enthält nicht alle Discord-spezifischen Details. Deshalb erhalten geeignete API-Operationen bzw. Schemas explizite Metadaten für Discord, beispielsweise:
+
+- Slash-Command- und Subcommand-Namen, Beschreibungen und Optionsreihenfolge;
+- Übersetzung von Discord-Optionen auf Request-Felder und API-Operationen;
+- Discord-Optionstypen, Pflichtfelder, Choices oder Autocomplete;
+- Discord-Berechtigungs-/Sichtbarkeitshinweise, soweit sie zum API-Vertrag gehören;
+- Hinweise zur Interaktionsart, etwa Bestätigungsdialog vor einer destruktiven Operation.
+
+Diese Metadaten bleiben deklarativ; sie enthalten keine Geschäftslogik. Der Discord-Adapter validiert und normalisiert die Optionen und ruft anschließend die gleiche Anwendungsoperation wie die REST-Route auf. Discord-UI-Bestätigung (beispielsweise vor dem Löschen) bleibt im Adapter; die Löschoperation und ihre fachliche Autorisierung bleiben zentral.
+
+Discord hat Limits und Semantik, die nicht automatisch aus REST-Schemas folgen (unter anderem höchstens 25 statische Choices je Option). Der Generator muss solche Grenzen erkennen und mit einem klaren Fehler abbrechen oder, falls fachlich passend, Autocomplete verwenden. Er darf Optionen nicht stillschweigend abschneiden.
+
+**Übergang:** `scripts/discord_commands.json` bleibt vorerst das aktuelle Registrierungsartefakt. In der Umstellungsphase generiert der neue Generator eine Payload und vergleicht sie mit der bisher registrierten Definition. Erst wenn Tests die Gleichheit bzw. jede beabsichtigte Verhaltensänderung abdecken, wird die JSON-Datei als manuell gepflegte Quelle entfernt oder als generiertes Artefakt gekennzeichnet. Registrierung bleibt ein expliziter Deployment-Schritt; Änderungen an generierten Commands müssen vor dem Lambda-Code-Deploy erfolgreich registriert/validiert werden.
+
+## Supabase-Enums als API- und Discord-Verträge
+
+**Zielrichtung:** PostgreSQL-Enums aus Supabase sollen, wo fachlich relevant, in der API-Typisierung/Validierung wiederverwendet werden. Die gleichen Werte sollen bei geeigneten Discord-Optionen als Choices angeboten werden. Die Anwendung soll einen separat abgelegten, generierten lokalen Snapshot der verwendeten Supabase-Enums haben; dieser Snapshot wird bei jedem Deployment aktualisiert und zusammen mit dem Lambda-Paket ausgeliefert.
+
+**Verifizierter Ist-Stand:** Im aktuellen Repository sind keine Supabase-Migrationen, SQL-Enum-Definitionen oder sonstigen expliziten Enum-Katalogdateien enthalten. Das bisherige Deployment bezieht Discord-Credentials, aber keine Supabase-Datenbank-Verbindung für eine Schema-Introspektion. Daher sind tatsächliche Enum-Namen, -Werte und eine sichere, verfügbare Quelle für einen Live-Snapshot noch zu ermitteln. Bis dahin gelten die in Python/JSON/README gefundenen Werte als bestehende Anwendungswerte, nicht als bewiesener vollständiger PostgreSQL-Enum-Katalog.
+
+Geplanter sicherer Ablauf:
+
+1. Vor dem Implementieren alle betroffenen Supabase-Enums samt Schema-/Tabellenbezug und tatsächlichen Werten inventarisieren. Herausfinden, ob die Supabase-Definitionen über versionierte Migrationen oder eine vorhandene, autorisierte PostgreSQL-Verbindung verwaltet werden.
+2. Als bevorzugte Live-Quelle eine eng begrenzte, nur lesende Schemaabfrage einrichten, die ausschließlich benötigte Enum-Namen und -Werte aus dem PostgreSQL-Katalog ausliest. Falls dies über einen RPC geschieht, muss er ausschließlich Metadaten zurückgeben, minimale Rechte haben und darf keine beliebigen SQL-Abfragen ermöglichen.
+3. `scripts/sync_supabase_enums.py` im Build ausführen und den Snapshot als `supabase_enums.json` im Release-/Lambda-Paket erzeugen. Zugangsdaten kommen nur aus einem dafür freigegebenen Secret/CI-Mechanismus, niemals aus dem Repository oder einer öffentlich erreichbaren API.
+4. Der Build validiert Snapshot-Schema, erwartete Enums und Werte. Bei fehlgeschlagener Abfrage, leerem/unerwartetem Ergebnis oder inkompatibler Enum-Änderung schlägt der Build deutlich fehl; er verwendet nicht unbemerkt einen veralteten Snapshot.
+5. API-Modelle verwenden die erzeugten Enum-Werte nur für Felder, deren Werte tatsächlich dem Supabase-Typ entsprechen. Discord-Choices werden aus denselben Werten gebaut, sofern Größe und UX geeignet sind; größere oder dynamische Mengen benötigen Autocomplete.
+6. Ein Test prüft, dass API-Validierung, Discord-Choices und Snapshot konsistent sind. DB-seitige Restriktionen und Autorisierung bleiben weiterhin in Supabase bzw. den zentralen Anwendungsregeln bestehen; ein lokaler Enum-Snapshot ersetzt keine Datenbankvalidierung.
+
+Wenn kein sicherer Live-Zugriff für CI verfügbar ist, wird vor Implementierung entschieden, ob versionierte Supabase-Migrationen die maßgebliche Quelle werden. Ein stilles Fallback auf eine eingecheckte alte Datei trotz fehlgeschlagener Live-Aktualisierung ist nicht vorgesehen. Ob der generierte Snapshot zusätzlich im Repository versioniert wird oder nur im Build-Artefakt entsteht, wird nach Klärung des Schema-Deployments entschieden; unabhängig davon ist das ausgelieferte Paket nachvollziehbar an den Enum-Stand des Releases gebunden.
+
+## REST-Operationsvertrag und Discord-Zuordnung
+
+Die API definiert typisierte Operationen und Antworten für mindestens die bereits vorhandenen Funktionsbereiche. Die endgültigen Methoden, Pfade und Schema-Namen werden beim Contract-Test-Batch festgelegt:
+
+| Fachbereich | Bestehendes Verhalten / vorgesehener API-Bereich |
+| --- | --- |
+| Server | Auflisten, Erstellen, Starten, Stoppen, Löschen, Log-Modus ändern, Agent-Dateien neu laden |
+| Whitelist | Einträge hinzufügen, entfernen und auflisten; Rollen zentral validieren |
+| Accounts | Kontostand bzw. Nutzerübersicht lesen; Game-Account verknüpfen |
+| Billing | Kostenübersicht, Zahlungen verbuchen und Wechselkurs ermitteln |
+| DNS | DNS-Datensätze lesen und mit GoDaddy synchronisieren |
+
+Jede Discord-Subcommand-Aktion wird auf genau eine benannte API-Operation abgebildet. Das bedeutet gleiche Request-Schemas, Validierungs- und Autorisierungsregeln sowie gleiche Anwendungsfunktion; es bedeutet nicht, dass Discord einen HTTP-Request an die öffentliche API senden muss. Reine Anzeige-/Hilfebefehle dürfen mehrere lesende Operationen aggregieren, wenn das im Vertrag explizit festgelegt und getestet wird.
+
+Die bisher vorhandenen REST-Pfade sollen zunächst als Kompatibilitätsadapter erhalten bleiben und auf die neuen Operationen delegieren. Ein API-Pfadbruch oder eine `/api/v1`-Einführung wird nicht stillschweigend mit dem internen Struktur-Refactor gekoppelt; die externe Versionierungsentscheidung wird getroffen, bevor alte Pfade entfernt werden.
+
+## Entscheidungsprotokoll
+
+### Bereits im Code bzw. in der bestehenden Dokumentation verankert
+
+Diese Punkte werden als bestehendes Verhalten behandelt und bei der Migration durch Tests abgesichert, bis der Nutzer eine bewusste Produktänderung beschließt:
+
+- Discord-Interaktionen nutzen Ed25519-Signaturprüfung; reguläre REST-Aufrufe nutzen `AUTH_SECRET`. Discord-Slash-Commands erhalten einen Deferred ACK und werden über eine zweite Lambda-Invocation verarbeitet. Der Worker aktualisiert die ursprüngliche Antwort; lange Texte werden auf Discord-konforme Nachrichten aufgeteilt.
+- Discord-Button-Bestätigungen werden deferred beantwortet und die ursprüngliche Bestätigungsnachricht danach aktualisiert.
+- Serverstart-Defaults umfassen `minecraft`, den Server-Slug `minecraft-default`, fünf Minuten Laufzeit und Log-Modus `none`. Laufzeiten akzeptieren Minuten, Stunden und Tage (`m`, `h`, `d`); ungültige Werte fallen derzeit auf fünf Minuten zurück.
+- Die registrierte Whitelist-Rolle bietet `player` und `server-admin`; die tatsächliche globale Admin-Prüfung für Cash akzeptiert `admin` und `superadmin`. Rollen und Statuswerte müssen gegen die echten Supabase-Typen geprüft werden, bevor sie in eine gemeinsame Enum überführt werden.
+- Zahlungen werden bei fehlender Discord-Währungsauswahl standardmäßig als CHF erfasst und nach EUR gutgeschrieben. Das ist ein Zahlungs-/Datenbankverhalten und darf nicht allein aus einer Discord-Choice abgeleitet werden.
+- Minecraft ist die einzige in der Anwendung konfigurierte und im Bootstrap unterstützte Spielkonfiguration; vorhandene `game`-Eingaben beweisen keine Unterstützung weiterer Spiele.
+- Das Löschen eines Servers verlangt im Discord-Flow eine Bestätigung und löscht laut bestehender Dokumentation Volume/DNS bzw. markiert den Datenbankeintrag, beendet aber nicht automatisch eine eventuell laufende VM. Das destruktive Verhalten muss explizit dokumentiert und getestet werden.
+- Server-Stop ohne Auswahl nimmt derzeit den ersten aktiven Server. Bei nicht lesbarem Supabase-Serverkatalog fällt die Serverliste derzeit teilweise auf Hetzner-Instanzen zurück.
+- Die API-Implementierung erzwingt derzeit keine HTTP-Methode auf ihren REST-Pfaden. Die Migration soll die Methoden explizit machen; vorhandene Clients und tatsächlich genutzte Aufrufmethoden sind zuvor zu ermitteln.
+- Der Deployment-Workflow kopiert derzeit `aws_lambda/` an die Paketwurzel und setzt dadurch den Handler als `lambda_function.lambda_handler`. Er registriert globale Discord-Kommandos über Discords `PUT`-Route; die bestehende Definition liegt in `scripts/discord_commands.json`.
+- `hetzner/bootstrap.sh` lädt VM-Dateien einzeln nach festgelegten Pfaden; Systemd startet Skripte anhand konkreter Dateinamen. Umbenennung/Verschiebung ist daher ein Deployment-Änderungspaket, nicht nur ein lokales Refactoring.
+- `scripts/run_user_tests.py` ist als Live-Cloud-/Ressourcen-Test zu behandeln und nicht unaufgefordert im normalen Testlauf auszuführen.
+
+### Vom Nutzer für dieses Refactoring vorgegeben
+
+- Erst API-Operationen und Definitionen als fachlichen Vertrag strukturieren; Discord-Befehle sollen darauf 1:1 abgebildet werden und nicht eine zweite Geschäftslogik enthalten.
+- Eine aufgeräumte, nachvollziehbare Projektstruktur mit kleineren, nach Zuständigkeit gruppierten Modulen schaffen.
+- Prüfen, ob Discord-Befehlsdefinitionen aus der API selbst generiert/abgeleitet und automatisiert registriert werden können.
+- Vorhandene Supabase-Enums für API-Werte wiederverwenden; eine separate lokale Enum-Datei als Cache nutzen und bei jedem Deployment aktualisieren.
+- Dieses README ist die zentrale Arbeits- und Entscheidungsdokumentation. Es wird nach jedem Umsetzungsbatch angepasst und bildet Änderungen am Plan nachvollziehbar ab.
+
+### Vorgeschlagene technische Entscheidungen – noch bei Umsetzung zu verifizieren
+
+- FastAPI + Pydantic + Mangum für REST/OpenAPI und Lambda, vorbehaltlich eines Prototyps mit dem produktiven Lambda-Eventformat.
+- Gemeinsame `application/`-Use-Cases; REST und Discord sind Transportadapter und rufen diese direkt auf.
+- Deklarative API-Metadaten ergänzen OpenAPI um Discord-Command-/Optionsdefinitionen; ein Generator erzeugt Registrierung und Hilfeansicht.
+- Supabase-Enums beim Deployment sicher aus der maßgeblichen DB-Schemaquelle lesen und in einen validierten JSON-Snapshot für das Lambda-Paket schreiben.
+- Bestehende REST-Pfade zunächst kompatibel halten; konkrete API-Versionierung und spätere Entfernung alter Aliase separat entscheiden.
+- Keine produktiven Secrets oder weitreichenden Supabase-Service-Schlüssel in generierte Dateien, Logs oder Repository-Dateien schreiben.
+
+## Refactoring in geordneten Batches
+
+Jeder Batch endet mit gezielten Tests, Deployment-/VM-Auswirkungsprüfung und einer Aktualisierung dieses Plans. Ein Batch wird nicht als erledigt markiert, bevor sein überprüfbares Ergebnis und die Rollback-Auswirkung festgehalten sind.
+
+### Batch 0 – Ist-Vertrag und sichere Testbasis
+
+- Alle tatsächlich verwendeten REST-Pfade, HTTP-Methoden, Request-/Response-Beispiele und Authentifizierungsvarianten erfassen; Abweichungen zwischen Code und README korrigieren.
+- Discord-Kommandos, Subcommands, Options, Defaults, Rollen-/Berechtigungsprüfungen und destruktive Aktionen aus JSON, Handlern und Tests zusammenführen.
+- Aktuelle Verhaltenstests für Antworten, Fehlercodes, Defaults, Autorisierung und Discord-Interaktionen ergänzen, ohne Live-Cloud-Ressourcen zu verändern.
+- Das AWS-Eventformat, Lambda-Paketlayout, Function-URL-/CloudFront-Routing und produktive Deploy-Reihenfolge verifizieren.
+- Supabase-Enums und deren Verwaltung inventarisieren; eine sichere Quelle und Zugangsmethode für CI bestimmen.
+- **Abnahmekriterium:** dokumentierter Ist-Vertrag, sichere gezielte Testbasis und bestätigte Event-/Schemaquellen; keine Änderung des Produktverhaltens.
+
+### Batch 1 – API-Schemas und fachliche Operationsliste
+
+- Request-/Response-Typen und Fehlerformat je Bereich festlegen.
+- Fachliche Operationen und Regeln aus `rest_api.py`/`commands/` herausarbeiten; zunächst bestehende Regeln bewahren.
+- API-Methoden, bestehende Pfad-Aliase und Autorisierungsgrenzen vertraglich testen.
+- Noch keine Discord-Registrierung auf die neue Definition umstellen.
+- **Abnahmekriterium:** getestete, nachvollziehbare API-Contracts und dokumentierte Kompatibilitätsmatrix.
+
+### Batch 2 – Package-Grundgerüst und dünne API-Transportebene
+
+- Neues Python-Package einführen und Konfiguration/Imports schrittweise migrieren.
+- FastAPI-App, Middleware, Auth-Abhängigkeiten und Pydantic-Schemas ergänzen.
+- Mangum-/Lambda-Integration mit dem produktiven Eventpfad erproben; bestehende HTTP- und Discord-Einstiege während Übergang getrennt halten.
+- Deploymentpaket, Handler-Einstellung, lokale Tests und CI gemeinsam umstellen.
+- **Abnahmekriterium:** bestehende REST-Contracts laufen durch den neuen Adapter; Lambda-Paket kann reproduzierbar gebaut und getestet werden.
+
+### Batch 3 – Gemeinsame Anwendungsfälle und Integrationen
+
+- Server-, Whitelist-, Account-, Billing- und DNS-Logik in nach Bereich organisierte Anwendungsfälle überführen.
+- Hetzner/Supabase/GoDaddy/Mojang/VM-Agent-Zugriffe in Integrationsmodule kapseln.
+- Rest-Routen werden dünne Adapter, die Eingaben validieren, Anwendungsfälle aufrufen und Ergebnisse abbilden.
+- Veraltete interne REST-Handler erst entfernen, wenn keine Aufrufer mehr existieren und Vertragstests bestehen.
+- **Abnahmekriterium:** keine duplizierte Geschäftsregel zwischen REST und Anwendungsfällen; fokussierte Unit-Tests ohne Netzwerk.
+
+### Batch 4 – Supabase-Enum-Snapshot und Validierung
+
+- Nach Klärung in Batch 0 die tatsächliche Enum-Quelle und CI-Berechtigung festlegen.
+- Generator/Synchronisierung implementieren, Snapshot-Schema definieren, Deploymentfehler bei fehlgeschlagener oder inkompatibler Synchronisierung sicherstellen.
+- Enum-Typen in API-Validierung und passende Discord-Choices integrieren; Werte mit Supabase abgleichen.
+- Abweichungen oder inkompatible Änderungen als Review-blockierende Buildfehler ausweisen.
+- **Abnahmekriterium:** jedes verwendete Enum ist auf DB-Quelle und Release-Snapshot zurückführbar; kein veralteter Fallback wird stillschweigend ausgeliefert.
+
+### Batch 5 – API-gesteuerte Discord-Definitionen
+
+- Discord-Metadaten/Mapping an den API-Vertrag anbinden und den Discord-Payload-Generator implementieren.
+- Discord-Optionen mit denselben Pydantic-/Anwendungsregeln validieren; Discord-Berechtigungen und fachliche Autorisierung getrennt prüfen.
+- Vor der Umschaltung alte und generierte Registrierungsdefinitionen vergleichen und Unterschiede prüfen.
+- Hilfeansicht/Command-Cache aus derselben Quelle generieren; Discord-Limits und Autocomplete-Fälle testen.
+- Deployment-Reihenfolge festlegen: generieren und validieren, Commands registrieren, Lambda-Paket bauen/deployen. Fehler bei Registrierung müssen das Deployment sichtbar stoppen.
+- **Abnahmekriterium:** kein unabhängig gepflegtes Commands-JSON als Quelle; alle registrierten Commands zeigen auf benannte API-Operationen und bestehen Mapping-/Schema-Tests.
+
+### Batch 6 – VM-Agent und Deploymentpfade
+
+- Nur falls sinnvoll, VM-Skripte in einen separaten Ordner verschieben.
+- Bootstrap-Download-URLs, Dateinamen, Imports, Systemd-Units und Hot-Reload gemeinsam aktualisieren.
+- Kompatibilität mit bereits laufenden VMs bzw. deren künftigem Reload-Verhalten prüfen; bestehende Volumes und Spielstände nicht verändern.
+- **Abnahmekriterium:** frische VM-Bootstrap-Installation und Reload laden exakt die erwarteten Dateien; laufende Daten und Systemd-Verhalten bleiben erhalten.
+
+### Batch 7 – Bereinigung, Kompatibilität und Dokumentation
+
+- Alte Handler, doppelte Definitionen und temporäre Migrationsadapter nur nach Aufruf-/Deprecation-Prüfung entfernen.
+- Entscheidung über API-Versionierung und Sunset-Datum für Legacy-Pfade dokumentieren.
+- README-Istbeschreibung, Setup, Deployment, OpenAPI, Enum-Sync und Discord-Generierung an den ausgelieferten Code angleichen.
+- Unit-Tests als Standard ausführen; Live-Cloud-E2E nur manuell mit ausdrücklich bestätigter Umgebung/Ressourcenfreigabe.
+- **Abnahmekriterium:** dokumentierte Zielstruktur entspricht Code und Deployment; alle ausgewählten Tests sind bestanden; verbleibende Risiken/Legacy-Schnittstellen sind benannt.
+
+## Bug- und Feature-Backlog
+
+Dieser Backlog hält gemeldete Probleme und gewünschte Verbesserungen fest, die bei der Refaktorierung oder in späteren Batches geprüft werden sollen. Ein Eintrag gilt erst als **verifiziert**, wenn Ursache und betroffene Komponenten untersucht und reproduzierbar dokumentiert wurden. Die hier beschriebenen Symptome stammen teilweise aus Nutzerbeobachtungen und sind noch keine Root-Cause-Analyse.
+
+Statuswerte: **Gemeldet** = noch zu untersuchen; **Geplant** = einem Batch zugeordnet, aber nicht umgesetzt; **In Arbeit** = aktive Umsetzung; **Erledigt** = Änderung und Prüfung dokumentiert. Prioritäten sind vorläufig und können nach der Analyse angepasst werden.
+
+### Bugs / technische Probleme
+
+| ID | Prio | Status | Beobachtung / erwartetes Verhalten | Nächster Schritt und Zuordnung |
+| --- | --- | --- | --- | --- |
+| BUG-001 | Hoch | Gemeldet | Wird eine VM ohne `/stop` beendet, bleibt der zugehörige Serverdatensatz in Supabase offenbar auf `online`. Erwartet wird, dass ein ungeplanter/anderweitig ausgelöster Shutdown den Datenbankstatus zuverlässig aktualisiert. Ein regulärer `/stop`-Pfad allein genügt nicht als Lifecycle-Garantie. | Lifecycle- und Crash-Pfade in VM-Agent, Lambda und Hetzner untersuchen; idempotentes Offline-Update samt erreichbarer Retry-/Recovery-Strategie definieren. Startet in Batch 0 (Reproduktion/Tests), Implementierung in Batch 3 oder 6 je nach Ursache. |
+| BUG-002 | Hoch | Gemeldet | Bei einem Shutdown ohne `/stop` wird der GoDaddy-DNS-Eintrag offenbar nicht auf `0.0.0.0` zurückgesetzt. Gleichzeitig wird in Supabase ein anderer DNS-Zustand beobachtet. Zielentscheidung des Nutzers: GoDaddy ist für tatsächlich veröffentlichte DNS-Records die maßgebliche Quelle der Wahrheit; Supabase soll keinen Erfolg behaupten, den GoDaddy nicht bestätigt hat. | Status- und Fehlerpfade beider Systeme getrennt nachvollziehen; Reihenfolge, Antwortprüfung und Retry/Abgleich festlegen. Keine Annahme treffen, dass Supabase hier tatsächlich synchron oder autoritativ ist. Mit BUG-003 gemeinsam in Batch 0 analysieren; Korrektur über DNS-Integration/Lifecycle in Batch 3 bzw. 6. |
+| BUG-003 | Mittel | Gemeldet | Supabase enthält bei der Synchronisierung aus GoDaddy offenbar nicht alle DNS-Records; laut Beobachtung fehlt ungefähr die Hälfte, darunter insbesondere TXT-Records. Diese Records sind für die aktuellen Server möglicherweise nicht nötig, können aber später relevant sein. | GoDaddy-Antwortseiten, Paging, unterstützte Record-Typen, Filter und Supabase-Schema vergleichen. Zunächst Vollständigkeit für alle Record-Typen (insbesondere TXT) erfassen, bevor das Ziel-Schema oder der Sync geändert wird. Batch 0 Analyse, DNS-Integration und Contract-Tests in Batch 3. |
+| BUG-004 | Niedrig | Gemeldet | Die Discord-Help-Ausgabe wird wegen der Discord-Längenbegrenzung in zwei Nachrichten gesplittet, aber der Umbruch liegt nicht an einer natürlichen Abschnittsgrenze. | Antwortsegmentierung so gestalten, dass zuerst an Absatz-/Abschnittsgrenzen unter dem Discord-Limit getrennt wird; bei langen Einzelabschnitten weiterhin sicher aufteilen. Im Zuge der Discord-Response-Arbeit (Batch 5/7) testen. |
+
+### Feature Requests / geplante Verbesserungen
+
+| ID | Prio | Status | Wunsch / Ziel | Geplante Einordnung |
+| --- | --- | --- | --- | --- |
+| FEAT-001 | Mittel | Geplant | Gleichzeitige Log-Streams verschiedener Server überlappen in Discord. Prüfen, ob ein Discord-Forum-Kanal mit einem Thread/Forum-Post pro Server die Logs sauber trennt. | Architektur-/Berechtigungsprüfung vor Umsetzung: Forum-Kanal und Threads anlegen/finden, parallele Stream-Zuordnung je Server, bestehende Threads archivieren/wiederverwenden sowie Discord-Ratenlimits und Fehler behandeln. Benötigte Bot-Rechte und Fallback-Kanal klären. Nicht Bestandteil des API-Struktur-Batches an sich; eigener Discord-Logging-Batch nach Stabilisierung der Log-Adapter. |
+| FEAT-002 | Hoch | Geplant | Beim Serverstart sollen relevante Startprozesse nachvollziehbar geloggt werden: Bootstrap, Docker, Minecraft-Server, Control API, Lifecycle Guard und weitere relevante Dienste. Wenn möglich, soll die Log-Übertragung bzw. Verbindung zur Steuerung früh verfügbar sein. | Startphasen und Abhängigkeiten inventarisieren. Logging-Transport so früh wie sicher möglich initialisieren, aber nicht vor Netzwerk, Secrets und benötigter Laufzeitumgebung; Startfehler des Log-Streamers dürfen nicht unbemerkt bleiben. Bootstrap-Ausgaben benötigen einen eigenen frühen Erfassungspfad, da der spätere VM-Agent noch nicht läuft. Reihenfolge, Persistenz/Buffer bei Netzwerkausfall und Shutdown-Verhalten mit VM-Agent-Batch (6) planen und testen. |
+| FEAT-003 | Mittel | Geplant | Discord-Logmeldungen sollen übersichtlicher sein und ihre Quelle (z. B. Bootstrap, Docker, Minecraft, Control API, Lifecycle Guard) schnell erkennen lassen. | Gemeinsames Log-Ereignisformat mit Quelle, Server, Zeit und Level definieren; Discord-Formatierung und Nachrichtenlängen/Ratenlimits berücksichtigen. Zusammen mit FEAT-001/002, nachdem Herkunft und Stream-Routing zuverlässig sind. |
+| FEAT-004 | Mittel | Geplant | Alle Discord-Commands sollen künftig englische Namen/Bezeichnungen verwenden. | Discord-Namen sind öffentliche Schnittstellen: Umbenennungen müssen als registrierte Command-Änderungen geplant werden. Englische Command-Namen, Beschreibungen, Optionen und Help-Ausgabe mit Command-Generator/Migration in Batch 5 umstellen und prüfen; bestehende Commands während Rollout berücksichtigen. |
+| FEAT-005 | Hoch | Geplant | Projektsprache soll Englisch werden: Code-Kommentare, Discord-Benachrichtigungen und -Antworten, Logs, README-/Entwicklertexte und sonstige nutzer-/entwicklerseitige Textinhalte. | Englisch wird die kanonische Sprache für neue und migrierte Texte. In Bereichen/Batches inkrementell übersetzen und Dokumentation nachziehen; keine Geschäftslogik nebenbei ändern. Externe Provider-/Spielausgaben dürfen unverändert durchgereicht werden. Spätere zusätzliche Übersetzungen wären eine separate Produktentscheidung. |
+| FEAT-006 | Hoch | Geplant | Discord-Commands sollen genau dieselben Enums wie die normale API verwenden. | Bereits im Zielentwurf berücksichtigt: Supabase-Enum-Snapshot → API-Typen/Validierung → Discord-Choices bzw. Autocomplete aus derselben Quelle. In Batch 4 die Enum-Synchronisierung und Konsistenztests liefern; Batch 5 verwendet diese Typen im Generator. Discord-Limits (z. B. maximal 25 statische Choices) berücksichtigen, ohne Werte still zu entfernen. |
+| FEAT-007 | Mittel | Geplant | Vorgegebene/feste Textinhalte sollen in JSON-Dateien abgelegt werden, damit Python-Handler übersichtlicher bleiben. | Wiederverwendbare, statische Texte wie Discord-Antwortvorlagen, Benachrichtigungen und ggf. lokalisierbare Texte in validierte JSON-Ressourcen auslagern; strukturierte Command-/Help-Metadaten aus dem API-Vertrag generieren. Keine pauschale Umwandlung aller Dateien: README, Quellcode, Skripte und notwendige Konfiguration bleiben in ihren passenden Formaten. JSON-Dateien müssen Schema-/Ladefehler sichtbar melden und werden mit Paketierung/Tests in Batch 5/7 abgesichert. |
+
+### Verbindliche Sprach- und Textdaten-Entscheidungen
+
+- **Englisch ist das Ziel für kanonische Projekttexte.** Die Umstellung erfolgt schrittweise; in jedem berührten Bereich wird die README-Dokumentation mit dem tatsächlich migrierten Stand aktualisiert. Ein vollständiger Übersetzungs-Batch wird eingeplant, statt Übersetzungen unkoordiniert über Refactoring-Änderungen zu verteilen.
+- **Discord-Commands und API-Enums haben eine gemeinsame Quelle.** Discord-Choices und API-Validierung werden aus denselben versionierten/aktualisierten Werten abgeleitet. Der Supabase-Snapshot-Prozess aus „Supabase-Enums als API- und Discord-Verträge“ bleibt dafür Voraussetzung.
+- **Feste Texte werden dort ausgelagert, wo es Übersicht und Wiederverwendung verbessert.** Für user-facing Texte wird JSON mit klaren Schlüsseln und Tests geprüft; nicht jeder Text und nicht jede Textdatei wird zwangsläufig JSON.
+- **Die README bleibt die Projekt-Arbeitsdokumentation.** Nach jedem abgeschlossenen Batch werden Status, Änderungen am Plan, relevante Entscheidungen und offene Folgearbeiten ergänzt; erledigte Backlog-Einträge werden nicht kommentarlos entfernt, sondern mit Ergebnis/Datum im Änderungsprotokoll nachvollziehbar gemacht.
+
+## Offene Entscheidungs- und Prüfstellen
+
+Diese Punkte werden nicht stillschweigend entschieden:
+
+1. Welche Supabase-Projekt-/DB-Schemaquelle ist maßgeblich: versionierte Migrationen, direkter read-only PostgreSQL-Zugang oder ein eng begrenzter Metadaten-RPC?
+2. Welcher sichere CI-Zugang darf Enum-Metadaten während jedes Deployments abrufen, und soll der generierte JSON-Snapshot nur im Release-Paket oder zusätzlich versioniert vorliegen?
+3. Welche bestehenden REST-Pfade/Methoden werden von externen Clients tatsächlich genutzt, und soll nach der kompatiblen Migration eine API-Version im Pfad eingeführt werden?
+4. Welche Discord-Befehle sollen bei Schemaänderungen automatisch global registriert werden, und soll die Registrierung bei jedem Deployment oder nur bei relevanten Änderungen laufen?
+5. Welche server-/userbezogenen Rechte sind verbindlicher Vertrag für REST-Clients? Der bestehende gemeinsame `AUTH_SECRET` identifiziert keinen individuellen Nutzer; ein vom Client gesendetes `discord_user_id` ist keine eigenständige Authentifizierung.
+6. Soll die Serverlöschoperation künftig eine laufende VM stoppen, oder bleibt das aktuell dokumentierte Verhalten bestehen? Diese potenziell destruktive Geschäftsregel wird vor einer Verhaltensänderung ausdrücklich bestätigt.
+7. Welche Art von GoDaddy-Synchronisierung soll als maßgeblich gelten (einseitiges Lesen, gezieltes Schreiben oder bidirektionaler Abgleich), und wie sollen externe Änderungen, nicht unterstützte Record-Typen und API-Fehler behandelt werden?
+8. Für Discord-Log-Threads: existiert bereits ein geeigneter Forum-Kanal, und soll der Bot ihn verwalten dürfen (Forum-Post/Thread erstellen, umbenennen und archivieren)?
+9. Welche Startphasen müssen zwingend live gestreamt werden, und welche dürfen bei noch nicht verfügbarer Verbindung lokal gepuffert bzw. später übertragen werden?
+
+## Änderungsprotokoll
+
+| Datum | Batch / Änderung | Ergebnis und aktualisierte Entscheidungen |
+| --- | --- | --- |
+| 2026-10-08 | Plan angelegt | Noch keine Implementierung. API-first-Ziel, Generator für Discord-Commands, Supabase-Enum-Snapshot pro Deployment und gestufte Migration aufgenommen. Enum-Quelle, Zugriff und Snapshot-Versionierung bleiben bis zur Ist-Prüfung offen. |
+| 2026-10-08 | Bug-/Feature-Backlog ergänzt | BUG-001 bis BUG-004 und FEAT-001 bis FEAT-007 als gemeldet/geplant aufgenommen. Keine Umsetzung oder Root-Cause-Bestätigung; Offline-/DNS-Probleme und Screenshot-Beobachtung müssen in Batch 0 reproduziert und analysiert werden. Englische Projektsprache, JSON-Ressourcen und gemeinsame API-/Discord-Enums als Refactoring-Ziele ergänzt. |
