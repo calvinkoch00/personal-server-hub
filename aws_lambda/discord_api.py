@@ -138,7 +138,10 @@ def execute_async_command(command_payload: dict, token: str, app_id: str) -> Non
         request = urllib.request.Request(
             url,
             data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordBot (https://github.com/calvinkoch00/personal-server-hub, 1.0)"
+            },
             method=method
         )
         try:

@@ -107,11 +107,15 @@ def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
         "interaction-token/messages/@original"
     )
     assert progress_request.get_method() == "PATCH"
+    assert progress_request.get_header("User-agent") == (
+        "DiscordBot (https://github.com/calvinkoch00/personal-server-hub, 1.0)"
+    )
     assert json.loads(progress_request.data) == {
         "content": "✅ Befehl empfangen – ich versuche ihn auszuführen…"
     }
     assert final_request.full_url == progress_request.full_url
     assert final_request.get_method() == "PATCH"
+    assert final_request.get_header("User-agent") == progress_request.get_header("User-agent")
     assert json.loads(final_request.data) == {"content": "Server gestartet"}
 
 
