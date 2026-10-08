@@ -77,7 +77,7 @@ Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und
 
 ## Discord Slash Commands
 
-Discord sendet Interaktionen an denselben API-Endpunkt wie die REST API. Lambda prüft die Ed25519-Signatur. Für Slash Commands antwortet Lambda sofort mit Discords deferred-Antwort (Typ `5`) und startet den eigentlichen Befehl als asynchrone Lambda-Invocation. Der Worker bearbeitet anschließend die ursprüngliche Discord-Antwort: zuerst „Befehl empfangen – ich versuche ihn auszuführen…“, danach das Ergebnis. Das ist eine Bestätigung und eine abschließende Aktualisierung, kein laufender Fortschrittsstream.
+Discord sendet Interaktionen an denselben API-Endpunkt wie die REST API. Lambda prüft die Ed25519-Signatur. Für Slash Commands antwortet Lambda sofort mit Discords deferred-Antwort (Typ `5`) und startet den eigentlichen Befehl als asynchrone Lambda-Invocation. Der Worker bearbeitet anschließend die ursprüngliche Discord-Antwort: zuerst „Befehl empfangen – ich versuche ihn auszuführen…“, danach das Ergebnis. Längere Texte werden wegen Discords Limit von 2.000 Zeichen pro Nachricht auf mehrere Nachrichten aufgeteilt. Das ist eine Bestätigung und eine abschließende Aktualisierung, kein laufender Fortschrittsstream.
 
 Button-Interaktionen (z. B. die Bestätigung von `/server delete`) erhalten eine deferred message update-Antwort (Typ `6`); der Worker aktualisiert danach die Bestätigungsnachricht. Lambda benötigt deshalb die Umgebungsvariable `AWS_LAMBDA_FUNCTION_NAME` (von AWS bereitgestellt) und die Ausführungsrolle braucht `lambda:InvokeFunction` auf dieselbe Funktion.
 

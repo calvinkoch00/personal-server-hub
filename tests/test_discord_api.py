@@ -120,6 +120,38 @@ def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
 
 
 @patch("discord_api.urllib.request.urlopen")
+def test_execute_help_splits_content_within_discord_limit(mock_urlopen):
+    response = MagicMock()
+    response.__enter__.return_value = response
+    mock_urlopen.return_value = response
+
+    command_payload = {"type": 2, "data": {"name": "help"}}
+    expected_content = discord_api.handle_interaction(command_payload)["body"]["data"]["content"]
+
+    discord_api.execute_async_command(
+        command_payload,
+        token="interaction-token",
+        app_id="123456789"
+    )
+
+    assert len(expected_content) > discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    assert mock_urlopen.call_count == 3
+    progress_request = mock_urlopen.call_args_list[0].args[0]
+    first_result_request = mock_urlopen.call_args_list[1].args[0]
+    second_result_request = mock_urlopen.call_args_list[2].args[0]
+
+    assert json.loads(progress_request.data)["content"].startswith("✅ Befehl empfangen")
+    assert first_result_request.get_method() == "PATCH"
+    assert second_result_request.get_method() == "POST"
+    result_chunks = [
+        json.loads(first_result_request.data)["content"],
+        json.loads(second_result_request.data)["content"]
+    ]
+    assert all(len(chunk) <= discord_api.DISCORD_MESSAGE_CONTENT_LIMIT for chunk in result_chunks)
+    assert "".join(result_chunks) == expected_content
+
+
+@patch("discord_api.urllib.request.urlopen")
 @patch("discord_api.handle_interaction")
 def test_execute_async_component_updates_original_message(mock_interaction, mock_urlopen):
     mock_interaction.return_value = {

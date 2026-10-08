@@ -6,6 +6,7 @@ import urllib.request
 from commands import server, finance, accounts
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
+DISCORD_MESSAGE_CONTENT_LIMIT = 2000
 
 
 def handle_interaction(body: dict, context=None) -> dict:
@@ -125,6 +126,21 @@ def handle_interaction(body: dict, context=None) -> dict:
     }
 
 
+def split_discord_content(content: str) -> list[str]:
+    chunks = []
+    while len(content) > DISCORD_MESSAGE_CONTENT_LIMIT:
+        split_at = content.rfind("\n", 0, DISCORD_MESSAGE_CONTENT_LIMIT)
+        if split_at < 0:
+            split_at = content.rfind(" ", 0, DISCORD_MESSAGE_CONTENT_LIMIT)
+        split_at = split_at + 1 if split_at > 0 else DISCORD_MESSAGE_CONTENT_LIMIT
+        chunks.append(content[:split_at])
+        content = content[split_at:]
+
+    if content or not chunks:
+        chunks.append(content)
+    return chunks
+
+
 def execute_async_command(command_payload: dict, token: str, app_id: str) -> None:
     app_id_path = urllib.parse.quote(str(app_id), safe="")
     token_path = urllib.parse.quote(token, safe="")
@@ -185,9 +201,21 @@ def execute_async_command(command_payload: dict, token: str, app_id: str) -> Non
             "flags": 64
         }
 
-    if command_payload.get("type") == 3 and response_type == 7:
-        send_webhook_request(original_response_url, "PATCH", response_data)
-    elif command_payload.get("type") == 3:
-        send_webhook_request(followup_url, "POST", response_data)
+    content = response_data.get("content")
+    if isinstance(content, str):
+        content_chunks = split_discord_content(content)
+        first_response_data = dict(response_data)
+        first_response_data["content"] = content_chunks[0]
     else:
-        send_webhook_request(original_response_url, "PATCH", response_data)
+        content_chunks = []
+        first_response_data = response_data
+
+    if command_payload.get("type") == 3 and response_type == 7:
+        send_webhook_request(original_response_url, "PATCH", first_response_data)
+    elif command_payload.get("type") == 3:
+        send_webhook_request(followup_url, "POST", first_response_data)
+    else:
+        send_webhook_request(original_response_url, "PATCH", first_response_data)
+
+    for content_chunk in content_chunks[1:]:
+        send_webhook_request(followup_url, "POST", {"content": content_chunk})
