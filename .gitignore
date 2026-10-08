@@ -16,3 +16,6 @@ ENV/
 # AWS SAM / Deployment-Archive
 .aws-sam/
 *.zip
+
+# Other
+.DS_Store
