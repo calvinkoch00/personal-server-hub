@@ -1,5 +1,8 @@
 import os
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from commands import server, finance, accounts
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
@@ -120,3 +123,68 @@ def handle_interaction(body: dict, context=None) -> dict:
             "data": response_data
         }
     }
+
+
+def execute_async_command(command_payload: dict, token: str, app_id: str) -> None:
+    app_id_path = urllib.parse.quote(str(app_id), safe="")
+    token_path = urllib.parse.quote(token, safe="")
+    original_response_url = (
+        f"https://discord.com/api/v10/webhooks/{app_id_path}/"
+        f"{token_path}/messages/@original"
+    )
+    followup_url = f"https://discord.com/api/v10/webhooks/{app_id_path}/{token_path}"
+
+    def send_webhook_request(url: str, method: str, data: dict) -> None:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(data).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method=method
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read()
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            print(f"[DISCORD FOLLOW-UP ERROR] HTTP {e.code}: {error_body}")
+        except Exception as e:
+            print(f"[DISCORD FOLLOW-UP ERROR] {e}")
+
+    is_slash_command = command_payload.get("type") == 2
+    if is_slash_command:
+        send_webhook_request(
+            original_response_url,
+            "PATCH",
+            {"content": "✅ Befehl empfangen – ich versuche ihn auszuführen…"}
+        )
+
+    try:
+        interaction_res = handle_interaction(command_payload)
+        status_code = interaction_res.get("statusCode", 500)
+        response_body = interaction_res.get("body", {})
+        if isinstance(response_body, str):
+            response_body = json.loads(response_body)
+
+        if status_code >= 400:
+            raise RuntimeError(
+                f"Discord command handler returned HTTP {status_code}: {response_body}"
+            )
+
+        response_type = response_body.get("type")
+        response_data = response_body.get("data")
+        if response_type not in (4, 7) or not isinstance(response_data, dict):
+            raise RuntimeError(f"Unexpected Discord command response: {response_body}")
+    except Exception as e:
+        print(f"[DISCORD COMMAND ERROR] {e}")
+        response_type = 4
+        response_data = {
+            "content": "❌ Der Befehl konnte nicht ausgeführt werden. Bitte prüfe die Server-Logs.",
+            "flags": 64
+        }
+
+    if command_payload.get("type") == 3 and response_type == 7:
+        send_webhook_request(original_response_url, "PATCH", response_data)
+    elif command_payload.get("type") == 3:
+        send_webhook_request(followup_url, "POST", response_data)
+    else:
+        send_webhook_request(original_response_url, "PATCH", response_data)

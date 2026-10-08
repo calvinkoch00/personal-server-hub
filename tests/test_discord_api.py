@@ -1,4 +1,5 @@
 import json
+from unittest.mock import MagicMock
 from unittest.mock import patch
 import discord_api
 
@@ -79,3 +80,58 @@ def test_handle_interaction_whitelist_subcommand(mock_wl):
         {"username": "Notch", "role": "server-admin"},
         "12345678"
     )
+
+
+@patch("discord_api.urllib.request.urlopen")
+@patch("discord_api.handle_interaction")
+def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
+    mock_interaction.return_value = {
+        "statusCode": 200,
+        "body": {"type": 4, "data": {"content": "Server gestartet"}}
+    }
+    response = MagicMock()
+    response.__enter__.return_value = response
+    mock_urlopen.return_value = response
+
+    discord_api.execute_async_command(
+        {"type": 2, "data": {"name": "status"}},
+        token="interaction-token",
+        app_id="123456789"
+    )
+
+    assert mock_urlopen.call_count == 2
+    progress_request = mock_urlopen.call_args_list[0].args[0]
+    final_request = mock_urlopen.call_args_list[1].args[0]
+    assert progress_request.full_url == (
+        "https://discord.com/api/v10/webhooks/123456789/"
+        "interaction-token/messages/@original"
+    )
+    assert progress_request.get_method() == "PATCH"
+    assert json.loads(progress_request.data) == {
+        "content": "✅ Befehl empfangen – ich versuche ihn auszuführen…"
+    }
+    assert final_request.full_url == progress_request.full_url
+    assert final_request.get_method() == "PATCH"
+    assert json.loads(final_request.data) == {"content": "Server gestartet"}
+
+
+@patch("discord_api.urllib.request.urlopen")
+@patch("discord_api.handle_interaction")
+def test_execute_async_component_updates_original_message(mock_interaction, mock_urlopen):
+    mock_interaction.return_value = {
+        "statusCode": 200,
+        "body": {"type": 7, "data": {"content": "Löschung abgebrochen", "components": []}}
+    }
+    response = MagicMock()
+    response.__enter__.return_value = response
+    mock_urlopen.return_value = response
+
+    discord_api.execute_async_command(
+        {"type": 3, "data": {"custom_id": "cancel_del:123"}},
+        token="interaction-token",
+        app_id="123456789"
+    )
+
+    request = mock_urlopen.call_args.args[0]
+    assert request.full_url.endswith("/messages/@original")
+    assert request.get_method() == "PATCH"

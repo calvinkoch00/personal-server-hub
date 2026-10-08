@@ -77,7 +77,7 @@ Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und
 
 ## Discord Slash Commands
 
-Die Interaktionen nutzen `type: 5` (Deferred Channel Message) mit nachgelagerten Webhook-Updates, wodurch Timeouts bei Initialisierungen ausgeschlossen sind.
+Slash Commands werden zuerst mit `type: 5` (Deferred Channel Message) bestätigt. Sobald der asynchrone Lambda-Worker startet, aktualisiert er die ursprüngliche Discord-Antwort auf „Befehl empfangen – ich versuche ihn auszuführen…“ und ersetzt diese nach Abschluss durch das Ergebnis. Dadurch bekommt Discord rechtzeitig eine Bestätigung und die Nutzer sehen anschließend den tatsächlichen Command-Status.
 
 | Befehl              | Option       | Typ    | Erforderlich | Beschreibung                                                                       |
 | ------------------- | ------------ | ------ | ------------ | ---------------------------------------------------------------------------------- |
@@ -375,7 +375,7 @@ In der AWS-Konsole unter **Configuration** $\rightarrow$ **Environment variables
 * `SUPABASE_URL`
 * `SUPABASE_KEY`
 
-*Wichtig:* Unter **General configuration** das Timeout der Lambda-Funktion auf **mindestens 30 Sekunden** erhöhen (Standard von 3 Sekunden führt zu Abbrüchen bei Hetzner- und Supabase-Aufrufen).
+*Wichtig:* Unter **General configuration** das Timeout der Lambda-Funktion auf **mindestens 30 Sekunden** erhöhen (Standard von 3 Sekunden führt zu Abbrüchen bei Hetzner- und Supabase-Aufrufen). Die Ausführungsrolle der Lambda-Funktion benötigt außerdem `lambda:InvokeFunction`-Berechtigung für genau diese Funktion, damit Discord-Interaktionen asynchron verarbeitet werden können.
 
 ### 4. Discord Bot Registrierung
 

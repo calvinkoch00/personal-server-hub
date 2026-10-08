@@ -123,3 +123,69 @@ def test_stage1_bootloader_generation():
     assert "$MOUNT_DIR/secrets.env" in script
     assert "hetzner/bootstrap.sh" in script
     assert "exec /opt/bootstrap/bootstrap.sh" in script
+
+
+@patch("lambda_function.verify_discord_signature", return_value=True)
+@patch("lambda_function.lambda_client.invoke")
+def test_discord_command_is_deferred_and_queued(mock_invoke, _mock_verify, monkeypatch):
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "hetzner-server-controller")
+    mock_invoke.return_value = {"StatusCode": 202}
+    event = {
+        "headers": {"x-signature-ed25519": "signature"},
+        "body": json.dumps({
+            "type": 2,
+            "application_id": "1234567890",
+            "token": "interaction-token",
+            "data": {"name": "status"}
+        })
+    }
+
+    response = lambda_handler(event, None)
+
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {"type": 5}
+    invocation = json.loads(mock_invoke.call_args.kwargs["Payload"])
+    assert invocation["async_worker"] is True
+    assert invocation["command_payload"]["data"]["name"] == "status"
+    assert invocation["token"] == "interaction-token"
+    assert invocation["app_id"] == "1234567890"
+
+
+@patch("lambda_function.verify_discord_signature", return_value=True)
+@patch("lambda_function.lambda_client.invoke")
+def test_discord_button_is_deferred_as_message_update(mock_invoke, _mock_verify, monkeypatch):
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "hetzner-server-controller")
+    mock_invoke.return_value = {"StatusCode": 202}
+    event = {
+        "headers": {"x-signature-ed25519": "signature"},
+        "body": json.dumps({
+            "type": 3,
+            "application_id": "1234567890",
+            "token": "interaction-token",
+            "data": {"custom_id": "confirm_del:skyblock:123"}
+        })
+    }
+
+    response = lambda_handler(event, None)
+
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {"type": 6}
+
+
+@patch("lambda_function.discord_api.execute_async_command")
+def test_async_worker_executes_queued_interaction(mock_execute):
+    event = {
+        "async_worker": True,
+        "command_payload": {"type": 2, "data": {"name": "status"}},
+        "token": "interaction-token",
+        "app_id": "1234567890"
+    }
+
+    response = lambda_handler(event, None)
+
+    assert response["statusCode"] == 200
+    mock_execute.assert_called_once_with(
+        command_payload=event["command_payload"],
+        token="interaction-token",
+        app_id="1234567890"
+    )
