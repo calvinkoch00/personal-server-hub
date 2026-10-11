@@ -80,9 +80,10 @@ jobs:
 
       - name: Get staging Discord bot token from Bitwarden
         if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && steps.changed-files.outputs.any_changed == 'true')
-        uses: bitwarden/sm-action@v2
+        uses: bitwarden/sm-action@v3.0.1
         with:
           access_token: ${{ secrets.BW_STAGING_ACCESS_TOKEN }}
+          set_env: true
           secrets: |
             1124bf1c-12e1-48b1-ae22-b4e00100b363 > DISCORD_BOT_TOKEN
 
