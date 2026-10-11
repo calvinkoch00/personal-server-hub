@@ -4,7 +4,7 @@ Description: GitHub Actions OIDC deployment role and runtime permissions for sta
 Parameters:
   GitHubRepository:
     Type: String
-    Default: calvinkoch00/personal-server-hub
+    Default: calvinkoch00@74788893/personal-server-hub@1405797796
   GitHubBranch:
     Type: String
     Default: staging
