@@ -3,6 +3,8 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from personal_server_hub.adapters.discord.slash_commands import slash_command_response
+from personal_server_hub.application.help import get_help_message
 from personal_server_hub.commands import server
 from personal_server_hub.commands import accounts, finance
 
@@ -84,7 +86,7 @@ def handle_interaction(body: dict, context=None) -> dict:
     response_data = None
 
     if command == "help":
-        response_data = {"content": server.get_help_message()}
+        response_data = {"content": get_help_message()}
     elif command == "status":
         response_data = {"content": server.handle_status()}
     elif command == "server":
@@ -118,13 +120,7 @@ def handle_interaction(body: dict, context=None) -> dict:
     else:
         response_data = {"content": f"Unbekannter Befehl: `/{command}`"}
 
-    return {
-        "statusCode": 200,
-        "body": {
-            "type": 4,
-            "data": response_data
-        }
-    }
+    return slash_command_response(response_data)
 
 
 def split_discord_content(content: str) -> list[str]:

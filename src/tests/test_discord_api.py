@@ -1,7 +1,27 @@
 import json
 from unittest.mock import MagicMock
 from unittest.mock import patch
+from personal_server_hub.application.help import get_help_message
+from personal_server_hub.adapters.discord.slash_commands import slash_command_response
 import personal_server_hub.discord_api as discord_api
+
+
+def test_slash_command_adapter_wraps_discord_message_data():
+    data = {"content": "Done", "components": [{"type": 1, "components": []}]}
+
+    assert slash_command_response(data) == {
+        "statusCode": 200,
+        "body": {"type": 4, "data": data},
+    }
+
+
+def test_discord_help_command_uses_application_help():
+    response = discord_api.handle_interaction(
+        {"type": 2, "data": {"name": "help"}}
+    )
+
+    assert response["statusCode"] == 200
+    assert response["body"]["data"]["content"] == get_help_message()
 
 
 def test_handle_interaction_ping():

@@ -387,6 +387,8 @@ Leitlinien:
 
 **FastAPI + Pydantic** bilden die HTTP-Schicht und den dokumentierten API-Vertrag. Die Projektstruktur folgt FastAPIs Muster für größere Anwendungen: ein Python-Package mit einem zentralen `main.py`, das die Anwendung erstellt und featurebezogene `APIRouter` einbindet. AWS Lambda bleibt der Host dieser Anwendung; **Mangum** ist der vorgesehene Adapter für HTTP-Lambda-Events, vorbehaltlich eines Prototyps mit der tatsächlich konfigurierten Function-URL-/CloudFront-Eventform. Nicht-HTTP-Lambda-Invocations, insbesondere asynchrone Discord-Worker, benötigen weiterhin einen AWS-Einstieg, der sie an den Worker weiterleitet.
 
+Der `/help`-Befehl ist der erste gemeinsame Use Case: Der FastAPI-Router und der Discord-Slash-Command-Adapter rufen beide `application.help.get_help_message()` auf. Der allgemeine Adapter in `adapters/discord/slash_commands.py` übersetzt die Antwort in das Discord-Format für Slash-Command-Antworten; er ist nicht an `/help` gebunden. Discord ruft dafür nicht die eigene öffentliche HTTP-URL auf. Weitere Befehle können schrittweise auf dasselbe Muster migriert werden.
+
 Der Aufbau ist ein Zielbild und keine Forderung, jeden Ordner oder jedes Modul von Anfang an anzulegen. Module werden nach tatsächlicher Zuständigkeit ergänzt:
 
 ```text

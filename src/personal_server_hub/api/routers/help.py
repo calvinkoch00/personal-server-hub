@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from personal_server_hub.api.schemas.help import HelpResponse
-from personal_server_hub.commands.server import get_help_message
+from personal_server_hub.application.help import get_help_message
 
 router = APIRouter()
 
