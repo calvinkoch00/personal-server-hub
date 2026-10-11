@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "aws_lambda"))
 # .env direkt laden
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-import rest_api
+import src.personal_server_hub.rest_api as rest_api
 
 print("=" * 60)
 print("🚀 STARTE LOKALE END-TO-END VALIDIERUNG MIT LIVE-DATENBANK")

@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch, MagicMock
-from services import hetzner
-import rest_api
+from src.personal_server_hub.services import hetzner
+import src.personal_server_hub.rest_api as rest_api
 
 @patch("services.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")

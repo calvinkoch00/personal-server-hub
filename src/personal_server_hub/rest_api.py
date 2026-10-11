@@ -2,7 +2,8 @@ import os
 import re
 import json
 from datetime import datetime, timezone
-from services import hetzner, agent, supabase, fx, dns, mojang
+from src.personal_server_hub.services import supabase
+from src.personal_server_hub.services import agent, dns, fx, hetzner, mojang
 
 def resolve_server_slug(raw_name: str | None, game: str = "minecraft") -> str:
     cleaned = str(raw_name or "").strip().lower().replace(" ", "_")

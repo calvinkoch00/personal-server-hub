@@ -352,42 +352,61 @@ Leitlinien:
 6. **Schrittweise und rückwärtsverträglich migrieren:** Bestehende Clients und REST-Pfade sollen nicht durch einen Struktur-Refactor unbeabsichtigt brechen.
 7. **Cloud-Integrationstests sind ausdrücklich opt-in:** Tests, die Ressourcen anlegen oder löschen, werden nicht als normale Unit-Tests oder automatisch in jedem PR ausgeführt.
 
-## Zielarchitektur (Vorschlag)
+## Zielarchitektur und Zuständigkeiten
 
-Vorgeschlagene Bibliotheken: **FastAPI + Pydantic** für HTTP-Routen, Schemas und OpenAPI; **Mangum** als AWS-Lambda-Adapter. Vor der Migration wird anhand der tatsächlich konfigurierten Lambda-Eventform (Function URL/CloudFront-Origin) ein kleiner Adapter-Prototyp getestet. Falls Mangum den produktiven Eventpfad nicht zuverlässig abbildet, wird der Lambda-Adapter gezielt angepasst; Geschäftslogik bleibt unabhängig von diesem Entscheid.
+**FastAPI + Pydantic** bilden die HTTP-Schicht und den dokumentierten API-Vertrag. Die Projektstruktur folgt FastAPIs Muster für größere Anwendungen: ein Python-Package mit einem zentralen `main.py`, das die Anwendung erstellt und featurebezogene `APIRouter` einbindet. AWS Lambda bleibt der Host dieser Anwendung; **Mangum** ist der vorgesehene Adapter für HTTP-Lambda-Events, vorbehaltlich eines Prototyps mit der tatsächlich konfigurierten Function-URL-/CloudFront-Eventform. Nicht-HTTP-Lambda-Invocations, insbesondere asynchrone Discord-Worker, benötigen weiterhin einen AWS-Einstieg, der sie an den Worker weiterleitet.
 
-Vorgeschlagener Aufbau:
+Der Aufbau ist ein Zielbild und keine Forderung, jeden Ordner oder jedes Modul von Anfang an anzulegen. Module werden nach tatsächlicher Zuständigkeit ergänzt:
 
 ```text
 src/personal_server_hub/
-├── lambda_handler.py             # AWS-Einstieg: HTTP-Adapter oder asynchroner Worker
-├── settings.py                   # Konfiguration und Validierung von Umgebungsvariablen
+├── __init__.py
+├── main.py                        # FastAPI-App erstellen und Router einbinden
+├── settings.py                    # Konfiguration und Validierung von Umgebungsvariablen
 ├── api/
-│   ├── app.py                    # FastAPI-Anwendung, Middleware und Fehlerabbildung
-│   ├── dependencies.py           # Authentifizierung und gemeinsame Request-Abhängigkeiten
-│   ├── schemas/                  # Gemeinsame, typisierte Request-/Response-Schemas
-│   └── routes/
+│   ├── __init__.py
+│   ├── dependencies.py            # Gemeinsame HTTP-Abhängigkeiten, z. B. REST-Authentifizierung
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── ...                    # Pydantic Request-/Response-Modelle nach Fachbereich
+│   └── routers/
+│       ├── __init__.py
 │       ├── servers.py
 │       ├── whitelist.py
 │       ├── accounts.py
 │       ├── billing.py
 │       └── dns.py
-├── application/                  # Fachliche Use Cases, unabhängig von HTTP/Discord
+├── application/                   # Fachliche Use Cases, unabhängig von HTTP/Discord/AWS
+│   ├── __init__.py
 │   ├── servers.py
 │   ├── whitelist.py
 │   ├── accounts.py
 │   ├── billing.py
 │   └── dns.py
-├── domain/                       # Fachliche Typen, Regeln und synchronisierte Enum-Daten
-│   └── supabase_enums.json       # Generierter, pro Release aktualisierter Enum-Snapshot
-├── integrations/                 # Hetzner-, Supabase-, GoDaddy-, Mojang- und VM-Agent-Clients
-└── adapters/
-    └── discord/
-        ├── interactions.py       # Signaturprüfung, ACK, Worker- und Button-Lebenszyklus
-        ├── command_map.py        # Discord-Optionen → API-Operationen und Request-Schemas
-        └── responses.py          # Discord-Formatierung, Fortschritt und 2.000-Zeichen-Aufteilung
+├── integrations/                  # Externe Systeme und ihre jeweiligen Clients
+│   ├── __init__.py
+│   ├── supabase.py                # Supabase Data API (PostgREST) als anfänglicher Datenzugriff
+│   ├── hetzner.py
+│   ├── godaddy.py
+│   ├── mojang.py
+│   └── vm_agent.py                # HTTP-Client zum Agenten auf einer laufenden VM
+├── adapters/
+│   ├── __init__.py
+│   ├── aws/
+│   │   ├── __init__.py
+│   │   └── lambda_handler.py      # HTTP-Adapter und asynchrone Worker-Dispatches
+│   └── discord/
+│       ├── __init__.py
+│       ├── router.py              # Discord-Webhook-Route in der FastAPI-App
+│       ├── interactions.py        # Signaturprüfung und Discord-Interaktionsablauf
+│       ├── command_map.py         # Discord-Optionen → gemeinsame Anwendungsoperationen
+│       ├── worker.py              # Asynchroner Worker und Discord-Follow-ups
+│       └── responses.py           # Discord-Formatierung und Nachrichtenaufteilung
+└── domain/                        # Nur bei Bedarf für fachliche Typen und Regeln
+    ├── __init__.py
+    └── supabase_enums.json        # Geplanter generierter Enum-Snapshot, falls umgesetzt
 
-vm_agent/                         # Optionaler neuer Repository-Ordner für die VM-Laufzeit
+vm_agent/                           # Separater Laufzeitbereich auf Hetzner-VMs
 ├── bootstrap.sh
 ├── control_api.py
 ├── lifecycle_guard.py
@@ -396,8 +415,7 @@ vm_agent/                         # Optionaler neuer Repository-Ordner für die 
 
 scripts/
 ├── generate_discord_commands.py  # API-Definitionen → Discord-Registrierungspayload
-├── sync_supabase_enums.py        # Sichere Enum-Abfrage → JSON-Snapshot
-└── e2e/                          # Bewusst gestartete Live-Cloud-Tests
+└── sync_supabase_enums.py        # Sichere Enum-Abfrage → JSON-Snapshot
 
 tests/
 ├── unit/
@@ -405,10 +423,49 @@ tests/
 │   ├── api/
 │   ├── integrations/
 │   └── discord/
-└── integration/
+├── integration/                   # Ohne Live-Cloud-Ressourcen als Standard
+└── e2e/                           # Explizit gestartete Live-Cloud-Tests
 ```
 
-Das ist ein Zielbild, kein Zwang, jeden Ordner sofort einzuführen. Die genaue Modulaufteilung wird während der Migration an den vorhandenen Use Cases ausgerichtet. Insbesondere wird `vm_agent/` erst verschoben, wenn alle Remote-Download- und Systemd-Pfade gleichzeitig angepasst und geprüft werden können.
+### Laufzeitfluss und Begriffe
+
+Die vier beteiligten Laufzeitsysteme sind **Discord** als Benutzeroberfläche, **AWS Lambda** als Host der API und Worker, **Supabase/PostgreSQL** als persistenter Datenspeicher sowie **Hetzner** als Laufzeitumgebung für Game-Server und VM-Agenten. FastAPI ist ein Framework innerhalb der Lambda-Anwendung und kein zusätzliches externes System.
+
+```text
+REST-Client
+  → AWS Lambda / Mangum
+  → FastAPI-App → Feature-Router → Pydantic-Validierung
+  → Anwendungsoperation
+  → Supabase-Integration und/oder Hetzner-/DNS-/VM-Agent-Integration
+  → HTTP-Antwort
+
+Discord-Nutzer
+  → Discord-Interaction-Webhook an AWS Lambda
+  → FastAPI-Discord-Route / Discord-Adapter
+  → Signatur prüfen, Discord-Payload abbilden, ACK senden
+  → asynchroner Lambda-Worker bei längeren Operationen
+  → dieselbe Anwendungsoperation wie für REST
+  → Discord-Antwort/Folgeantwort
+
+VM-Agent
+  → kann je nach bestehendem Use Case direkt Supabase aufrufen
+    oder eine REST-Route des Hubs aufrufen
+  ← kann über die VM-Agent-Integration von Lambda gesteuert werden
+```
+
+Die Zuständigkeiten sind ausdrücklich voneinander zu unterscheiden:
+
+- **FastAPI-App und `main.py`:** erstellen die HTTP-Anwendung und binden Router ein. `main.py` ist der Zusammensetzungs-/Einstiegspunkt der FastAPI-App, nicht der Ort für sämtliche Geschäftslogik.
+- **Feature-Router (`APIRouter`):** definieren HTTP-Pfade, Methoden, Request-/Response-Schemas und OpenAPI-Metadaten. Ein Endpunkt validiert und übersetzt die HTTP-Anfrage und ruft eine Anwendungsoperation auf.
+- **Pydantic-Schemas:** beschreiben und validieren die HTTP-Datenformen. Discord kann dieselben passenden Request-Schemas zur Validierung seiner Optionen verwenden, ohne Discord selbst zu einem REST-Client zu machen.
+- **FastAPI-Dependencies:** liefern gemeinsame Request-Abhängigkeiten, etwa REST-Authentifizierung oder konfigurierte Clients. Sie sind kein eigenständiger Geschäftslogik-Layer.
+- **Middleware:** umschließt HTTP-Anfragen und -Antworten für wirklich querschnittliche HTTP-Aufgaben wie CORS, Request-ID oder Logging. Discord-Payload-Übersetzung und Discord-ACKs sind keine Middleware-Aufgaben.
+- **Adapter:** übersetzen Protokoll- und Hosting-Grenzen. Der Discord-Adapter versteht Interactions und deren Signatur-/ACK-/Follow-up-Protokoll; der AWS-Adapter versteht Lambda-Events und Worker-Aufrufe; FastAPI-Router sind der HTTP-Adapter für REST-Clients.
+- **Anwendungsoperationen (Use Cases):** setzen fachliche Regeln um und koordinieren Schritte wie Serverstart, Whitelist-Änderung oder DNS-Synchronisierung. Sie hängen nicht von FastAPI, Discord-JSON oder Lambda-Events ab. REST- und Discord-Einstiege rufen dieselben Operationen direkt auf; Discord sendet keinen internen HTTP-Request an die eigene öffentliche REST-URL.
+- **Integrationen:** kapseln die Kommunikation mit Supabase, Hetzner, GoDaddy, Mojang und dem VM-Agenten. Anwendungsoperationen entscheiden, welche Aktion fachlich auszuführen ist; Integrationen kapseln, wie der externe Aufruf erfolgt.
+- **VM-Agent:** ist ein separates Programm auf der Hetzner-VM und kein Teil der Lambda-/FastAPI-App. Lambda kann ihn über HTTP steuern. Bestehende VM-Agent-Skripte kommunizieren außerdem teils direkt mit Supabase oder rufen den Hub auf; diese vorhandenen Pfade dürfen nicht als ausschließlich über die API laufend dargestellt oder bei der Migration unbeabsichtigt geändert werden.
+
+Der VM-Agent sollte erst in einen neuen Repository-Ordner verschoben werden, wenn Bootstrap-Download-URLs, Dateinamen, Imports und Systemd-Pfade gemeinsam aktualisiert und getestet werden können.
 
 ## Discord-Befehle aus den API-Definitionen erzeugen
 
@@ -428,16 +485,41 @@ Discord hat Limits und Semantik, die nicht automatisch aus REST-Schemas folgen (
 
 **Übergang:** `scripts/discord_commands.json` bleibt vorerst das aktuelle Registrierungsartefakt. In der Umstellungsphase generiert der neue Generator eine Payload und vergleicht sie mit der bisher registrierten Definition. Erst wenn Tests die Gleichheit bzw. jede beabsichtigte Verhaltensänderung abdecken, wird die JSON-Datei als manuell gepflegte Quelle entfernt oder als generiertes Artefakt gekennzeichnet. Registrierung bleibt ein expliziter Deployment-Schritt; Änderungen an generierten Commands müssen vor dem Lambda-Code-Deploy erfolgreich registriert/validiert werden.
 
+## Supabase-Zugriffsentscheidung
+
+**Entschieden (2026-10-11):** Die Lambda-Anwendung verwendet für ihren anfänglichen Datenzugriff die **Supabase Data API (PostgREST/REST)**. PostgreSQL bleibt die zugrunde liegende relationale Datenbank. Die Anwendung erhält vorerst keine direkte PostgreSQL-Verbindung. Der bestehende Code verwendet bereits die Supabase REST-Schnittstelle; die Refaktorierung kapselt diesen Zugriff hinter der Supabase-Integration, statt die Anwendungs- oder HTTP-Schicht von PostgREST-URLs und -Filter-Syntax abhängig zu machen.
+
+Diese Wahl hält den ersten Refactoring-Schritt nahe am vorhandenen Betrieb: Lambda und die VM-Agenten können die Integration über HTTPS erreichen, ohne PostgreSQL-Netzwerkzugriff oder einen Pool langlebiger Datenbankverbindungen in der Lambda-Umgebung einzurichten. Die vorhandenen Abfragen sind überwiegend CRUD-Aufrufe auf Tabellen/Views und RPC-Aufrufe.
+
+Die bewussten Abwägungen:
+
+| Aspekt | Supabase Data API (gewählt für den Einstieg) | Direkte PostgreSQL-Verbindung (nicht gewählt für den Einstieg) |
+| --- | --- | --- |
+| Verbindung | HTTP über die Supabase-API; passt zu Lambda und den bestehenden VM-Agenten. | Datenbank-Host, TLS-/Netzwerkzugriff, Zugangsdaten und Lambda-taugliches Verbindungsmanagement erforderlich; bei vielen kurzlebigen Invocations Pooling/Connection-Limits berücksichtigen. |
+| Typische Datenoperationen | CRUD auf Tabellen/Views sowie vorhandene RPCs sind direkt nutzbar. | Volles SQL für Joins, komplexe Abfragen und genaue Kontrolle über Abfragepläne. |
+| Transaktionen | Eine einzelne Datenbankfunktion/RPC kann zusammengehörige DB-Arbeit serverseitig atomar ausführen. Mehrere separate REST-Aufrufe bilden jedoch nicht automatisch eine gemeinsame Transaktion. | Mehrere SQL-Anweisungen können innerhalb einer expliziten Transaktion atomar ausgeführt werden. |
+| Komplexe Datenzugriffe | Verschachtelte Beziehungen und Filter sind über PostgREST möglich, können bei komplexen Workflows jedoch unhandlich werden oder zu mehreren HTTP-Roundtrips führen. | SQL ist flexibler und häufig übersichtlicher, wenn eine Operation komplexe relationale Abfragen benötigt. |
+| Schema-/Enum-Introspektion | Die Data API ist kein allgemeiner Zugang zu PostgreSQL-Systemkatalogen. Das Auslesen tatsächlicher PostgreSQL-Enums muss über eine separat freigegebene Quelle erfolgen. | Mit einem ausreichend berechtigten, nur lesenden DB-Rollen-Zugang sind gezielte Abfragen der PostgreSQL-Systemkataloge möglich. |
+| Berechtigungen | Supabase-API-Schlüssel/JWTs und RLS bestimmen den Datenbankkontext der API-Anfrage. Ein privilegierter Service-Schlüssel kann RLS umgehen und ist ausschließlich serverseitig geheim zu halten. | Die konfigurierte PostgreSQL-Rolle und deren Grants bestimmen den Zugriff. RLS kann ebenfalls greifen, aber Rolle und Session-/User-Kontext müssen ausdrücklich korrekt eingerichtet sein. |
+
+### Integrationsgrenze für einen späteren Wechsel
+
+Die Supabase-Integration ist zunächst ein konkreter HTTP-Client und keine vorweggenommene, generische Datenbank-Abstraktionsplattform. Anwendungscode soll trotzdem keine PostgREST-URLs, Query-Filter wie `status=eq.offline`, HTTP-Header oder rohe `select`-Ausdrücke zusammensetzen. Die Integration stellt kleine, am tatsächlichen Bedarf orientierte Methoden bereit, etwa „Server nach Slug suchen“, „Serverstatus aktualisieren“ oder „Whitelist-Einträge laden“. Die Anwendungsoperationen koordinieren fachliche Schritte über diese Methoden.
+
+Beim späteren Wechsel auf direkte SQL-Zugriffe kann die Implementierung dieser Integrationsmethoden durch SQL ersetzt werden. API-Router, Pydantic-Verträge und Anwendungsoperationen sollen dabei möglichst unverändert bleiben. Der Wechsel ist dennoch kein reiner Treiber-Austausch: Datenabfragen und Joins müssen neu formuliert, Verbindungs-/Pool-Lebenszyklus und Transaktionsgrenzen eingerichtet sowie Berechtigungen und Verhalten durch Integrationstests überprüft werden. Wenn mehrere DB-Änderungen gemeinsam atomar sein müssen, soll dies schon beim REST-Zugriff in einer passenden Datenbankfunktion/RPC gebündelt werden; externe Effekte wie Hetzner- oder GoDaddy-Aufrufe werden dadurch nicht Teil derselben PostgreSQL-Transaktion.
+
+Die Zugriffsart allein garantiert keine Endnutzer-Autorisierung. Der derzeitige gemeinsame `AUTH_SECRET` authentifiziert einen REST-Aufruf gegenüber dem Hub, belegt aber keine individuelle Discord-Identität; ein vom Client übermitteltes `discord_user_id` ist für sich kein Identitätsnachweis. Ebenso gelten RLS-Regeln nur im tatsächlich von Supabase/PostgreSQL gesetzten Authentifizierungs- und Rollen-Kontext. Die Verwendung der Data API darf nicht als Ersatz für fachliche Autorisierung in Anwendungsoperationen dokumentiert oder angenommen werden.
+
 ## Supabase-Enums als API- und Discord-Verträge
 
 **Zielrichtung:** PostgreSQL-Enums aus Supabase sollen, wo fachlich relevant, in der API-Typisierung/Validierung wiederverwendet werden. Die gleichen Werte sollen bei geeigneten Discord-Optionen als Choices angeboten werden. Die Anwendung soll einen separat abgelegten, generierten lokalen Snapshot der verwendeten Supabase-Enums haben; dieser Snapshot wird bei jedem Deployment aktualisiert und zusammen mit dem Lambda-Paket ausgeliefert.
 
-**Verifizierter Ist-Stand:** Im aktuellen Repository sind keine Supabase-Migrationen, SQL-Enum-Definitionen oder sonstigen expliziten Enum-Katalogdateien enthalten. Das bisherige Deployment bezieht Discord-Credentials, aber keine Supabase-Datenbank-Verbindung für eine Schema-Introspektion. Daher sind tatsächliche Enum-Namen, -Werte und eine sichere, verfügbare Quelle für einen Live-Snapshot noch zu ermitteln. Bis dahin gelten die in Python/JSON/README gefundenen Werte als bestehende Anwendungswerte, nicht als bewiesener vollständiger PostgreSQL-Enum-Katalog.
+**Verifizierter Ist-Stand und Abgrenzung:** Im aktuellen Repository sind keine Supabase-Migrationen, SQL-Enum-Definitionen oder sonstigen expliziten Enum-Katalogdateien enthalten. Das bisherige Deployment bezieht Discord-Credentials, aber keine Supabase-Datenbank-Verbindung für eine Schema-Introspektion. Die Entscheidung für die Supabase Data API als Anwendungs-Datenzugriff stellt keinen direkten Zugriff auf PostgreSQL-Systemkataloge bereit und löst daher die Quelle des Enum-Snapshots nicht. Tatsächliche Enum-Namen, -Werte und eine sichere, verfügbare Quelle für einen Live-Snapshot sind separat zu ermitteln. Bis dahin gelten die in Python/JSON/README gefundenen Werte als bestehende Anwendungswerte, nicht als bewiesener vollständiger PostgreSQL-Enum-Katalog.
 
 Geplanter sicherer Ablauf:
 
-1. Vor dem Implementieren alle betroffenen Supabase-Enums samt Schema-/Tabellenbezug und tatsächlichen Werten inventarisieren. Herausfinden, ob die Supabase-Definitionen über versionierte Migrationen oder eine vorhandene, autorisierte PostgreSQL-Verbindung verwaltet werden.
-2. Als bevorzugte Live-Quelle eine eng begrenzte, nur lesende Schemaabfrage einrichten, die ausschließlich benötigte Enum-Namen und -Werte aus dem PostgreSQL-Katalog ausliest. Falls dies über einen RPC geschieht, muss er ausschließlich Metadaten zurückgeben, minimale Rechte haben und darf keine beliebigen SQL-Abfragen ermöglichen.
+1. Vor dem Implementieren alle betroffenen Supabase-Enums samt Schema-/Tabellenbezug und tatsächlichen Werten inventarisieren. Feststellen, ob versionierte Supabase-Migrationen die maßgebliche Schemaquelle sind und ob eine autorisierte, nur lesende PostgreSQL-Verbindung für CI zulässig ist.
+2. Für den Enum-Snapshot eine separate, eng begrenzte Quelle bestimmen: bevorzugt versionierte Migrationen oder eine nur lesende Abfrage, die ausschließlich die benötigten Enum-Namen und -Werte aus dem PostgreSQL-Katalog ausliest. Falls dafür ein RPC verwendet wird, darf er nur Metadaten zurückgeben, muss minimale Rechte besitzen und keine beliebigen SQL-Abfragen ermöglichen. Diese Build-/Schema-Introspektion ist von den Laufzeit-Datenzugriffen der Anwendung über die Supabase Data API getrennt.
 3. `scripts/sync_supabase_enums.py` im Build ausführen und den Snapshot als `supabase_enums.json` im Release-/Lambda-Paket erzeugen. Zugangsdaten kommen nur aus einem dafür freigegebenen Secret/CI-Mechanismus, niemals aus dem Repository oder einer öffentlich erreichbaren API.
 4. Der Build validiert Snapshot-Schema, erwartete Enums und Werte. Bei fehlgeschlagener Abfrage, leerem/unerwartetem Ergebnis oder inkompatibler Enum-Änderung schlägt der Build deutlich fehl; er verwendet nicht unbemerkt einen veralteten Snapshot.
 5. API-Modelle verwenden die erzeugten Enum-Werte nur für Felder, deren Werte tatsächlich dem Supabase-Typ entsprechen. Discord-Choices werden aus denselben Werten gebaut, sofern Größe und UX geeignet sind; größere oder dynamische Mengen benötigen Autocomplete.
@@ -488,12 +570,22 @@ Diese Punkte werden als bestehendes Verhalten behandelt und bei der Migration du
 - Vorhandene Supabase-Enums für API-Werte wiederverwenden; eine separate lokale Enum-Datei als Cache nutzen und bei jedem Deployment aktualisieren.
 - Dieses README ist die zentrale Arbeits- und Entscheidungsdokumentation. Es wird nach jedem Umsetzungsbatch angepasst und bildet Änderungen am Plan nachvollziehbar ab.
 
+### Vom Nutzer getroffene Architekturentscheidung
+
+- Für den anfänglichen Datenzugriff der Lambda-Anwendung wird die Supabase Data API (PostgREST/REST) verwendet; eine direkte PostgreSQL-Verbindung ist nicht Teil des ersten Refactoring-Schritts.
+- Supabase-HTTP-/PostgREST-Details bleiben in einer dedizierten Integration. Anwendungscode verwendet fachlich benannte Integrationsmethoden statt rohe REST-URLs und Filterausdrücke.
+- Eine spätere Umstellung auf SQL soll primär die Supabase-Integration betreffen, erfordert aber weiterhin SQL-Abfragen, Connection-Pooling/-Lebenszyklus, Transaktionsdesign, Berechtigungsprüfung und Integrationstests.
+- Die Enum-Snapshot-Quelle bleibt separat offen; die Wahl der Data API impliziert weder direkten PostgreSQL-Zugriff noch einen verfügbaren Schema-Introspektionsweg.
+- Die FastAPI-Struktur folgt einem Python-Package mit `main.py` als App-Zusammensetzungspunkt, featurebezogenen `APIRouter`-Modulen, gemeinsamen API-Abhängigkeiten und Pydantic-Schemas. Anwendungsoperationen und Integrationen bleiben von HTTP und Discord getrennt.
+- Discord-zu-Anwendungslogik ist Adapter-Verhalten, keine FastAPI-Middleware. Middleware ist querschnittlichen HTTP-Aufgaben vorbehalten. AWS-Lambda-HTTP-Events und asynchrone Worker-Aufrufe werden im AWS-Adapter behandelt; der VM-Agent bleibt ein separates Programm auf Hetzner.
+
 ### Vorgeschlagene technische Entscheidungen – noch bei Umsetzung zu verifizieren
 
 - FastAPI + Pydantic + Mangum für REST/OpenAPI und Lambda, vorbehaltlich eines Prototyps mit dem produktiven Lambda-Eventformat.
 - Gemeinsame `application/`-Use-Cases; REST und Discord sind Transportadapter und rufen diese direkt auf.
+- Die konkrete Python-Package-/Router-Aufteilung wird anhand der vorhandenen Fachbereiche umgesetzt; nur `main.py`, Router, Schemas, Abhängigkeiten, Use Cases und tatsächlich erforderliche Integrationen werden eingeführt.
 - Deklarative API-Metadaten ergänzen OpenAPI um Discord-Command-/Optionsdefinitionen; ein Generator erzeugt Registrierung und Hilfeansicht.
-- Supabase-Enums beim Deployment sicher aus der maßgeblichen DB-Schemaquelle lesen und in einen validierten JSON-Snapshot für das Lambda-Paket schreiben.
+- Die Supabase Data API (PostgREST/REST) ist der beschlossene Laufzeit-Datenzugriff der Anwendung. Die separate Quelle und der sichere CI-Zugriff für Supabase-Enums müssen noch festgelegt werden.
 - Bestehende REST-Pfade zunächst kompatibel halten; konkrete API-Versionierung und spätere Entfernung alter Aliase separat entscheiden.
 - Keine produktiven Secrets oder weitreichenden Supabase-Service-Schlüssel in generierte Dateien, Logs oder Repository-Dateien schreiben.
 
@@ -520,17 +612,18 @@ Jeder Batch endet mit gezielten Tests, Deployment-/VM-Auswirkungsprüfung und ei
 
 ### Batch 2 – Package-Grundgerüst und dünne API-Transportebene
 
-- Neues Python-Package einführen und Konfiguration/Imports schrittweise migrieren.
-- FastAPI-App, Middleware, Auth-Abhängigkeiten und Pydantic-Schemas ergänzen.
-- Mangum-/Lambda-Integration mit dem produktiven Eventpfad erproben; bestehende HTTP- und Discord-Einstiege während Übergang getrennt halten.
+- Neues Python-Package einführen; `main.py` erstellt die FastAPI-App und bindet featurebezogene `APIRouter` ein.
+- Pydantic-Schemas, gemeinsame FastAPI-Dependencies und nur tatsächlich benötigte HTTP-Middleware ergänzen; Discord-Übersetzung bleibt im Discord-Adapter.
+- Mangum-/Lambda-Integration mit dem produktiven Eventpfad erproben; asynchrone Lambda-Worker-Aufrufe im AWS-Adapter behandeln und HTTP-/Discord-Einstiege während des Übergangs klar trennen.
 - Deploymentpaket, Handler-Einstellung, lokale Tests und CI gemeinsam umstellen.
 - **Abnahmekriterium:** bestehende REST-Contracts laufen durch den neuen Adapter; Lambda-Paket kann reproduzierbar gebaut und getestet werden.
 
 ### Batch 3 – Gemeinsame Anwendungsfälle und Integrationen
 
 - Server-, Whitelist-, Account-, Billing- und DNS-Logik in nach Bereich organisierte Anwendungsfälle überführen.
-- Hetzner/Supabase/GoDaddy/Mojang/VM-Agent-Zugriffe in Integrationsmodule kapseln.
+- Hetzner-/Supabase-/GoDaddy-/Mojang-/VM-Agent-Zugriffe in Integrationsmodule kapseln; PostgREST-URLs und Filter-Syntax bleiben innerhalb der Supabase-Integration.
 - Rest-Routen werden dünne Adapter, die Eingaben validieren, Anwendungsfälle aufrufen und Ergebnisse abbilden.
+- Discord ruft dieselben Anwendungsoperationen direkt auf; es gibt keinen internen Request an die eigene öffentliche REST-URL.
 - Veraltete interne REST-Handler erst entfernen, wenn keine Aufrufer mehr existieren und Vertragstests bestehen.
 - **Abnahmekriterium:** keine duplizierte Geschäftsregel zwischen REST und Anwendungsfällen; fokussierte Unit-Tests ohne Netzwerk.
 
@@ -604,7 +697,7 @@ Statuswerte: **Gemeldet** = noch zu untersuchen; **Geplant** = einem Batch zugeo
 
 Diese Punkte werden nicht stillschweigend entschieden:
 
-1. Welche Supabase-Projekt-/DB-Schemaquelle ist maßgeblich: versionierte Migrationen, direkter read-only PostgreSQL-Zugang oder ein eng begrenzter Metadaten-RPC?
+1. Welche Supabase-Projekt-/DB-Schemaquelle ist für die Enum-Definitionen maßgeblich: versionierte Migrationen, direkter read-only PostgreSQL-Zugang oder ein eng begrenzter Metadaten-RPC? Der reguläre Anwendungszugriff bleibt davon unabhängig die Supabase Data API.
 2. Welcher sichere CI-Zugang darf Enum-Metadaten während jedes Deployments abrufen, und soll der generierte JSON-Snapshot nur im Release-Paket oder zusätzlich versioniert vorliegen?
 3. Welche bestehenden REST-Pfade/Methoden werden von externen Clients tatsächlich genutzt, und soll nach der kompatiblen Migration eine API-Version im Pfad eingeführt werden?
 4. Welche Discord-Befehle sollen bei Schemaänderungen automatisch global registriert werden, und soll die Registrierung bei jedem Deployment oder nur bei relevanten Änderungen laufen?
@@ -620,3 +713,4 @@ Diese Punkte werden nicht stillschweigend entschieden:
 | --- | --- | --- |
 | 2026-10-08 | Plan angelegt | Noch keine Implementierung. API-first-Ziel, Generator für Discord-Commands, Supabase-Enum-Snapshot pro Deployment und gestufte Migration aufgenommen. Enum-Quelle, Zugriff und Snapshot-Versionierung bleiben bis zur Ist-Prüfung offen. |
 | 2026-10-08 | Bug-/Feature-Backlog ergänzt | BUG-001 bis BUG-004 und FEAT-001 bis FEAT-007 als gemeldet/geplant aufgenommen. Keine Umsetzung oder Root-Cause-Bestätigung; Offline-/DNS-Probleme und Screenshot-Beobachtung müssen in Batch 0 reproduziert und analysiert werden. Englische Projektsprache, JSON-Ressourcen und gemeinsame API-/Discord-Enums als Refactoring-Ziele ergänzt. |
+| 2026-10-11 | Architektur- und Supabase-Zugriffsentscheidung dokumentiert | Als Zielstruktur ein FastAPI-Python-Package mit `main.py`, Feature-Routern, Pydantic-Schemas, API-Abhängigkeiten, gemeinsamen Anwendungsoperationen, Integrationen sowie getrennten AWS-/Discord-Adaptern festgehalten. Discord-Übersetzung ist Adapter-Verhalten und keine Middleware; der Hetzner-VM-Agent bleibt ein separater Laufzeitbereich. Für den anfänglichen Laufzeit-Datenzugriff Supabase Data API (PostgREST/REST) gewählt, direkte PostgreSQL-Verbindung zurückgestellt und die Integrationsgrenze für einen möglichen späteren SQL-Wechsel dokumentiert. Enum-Schemaquelle und sicherer CI-Zugriff bleiben offen. Diese Dokumentation ändert noch keinen Anwendungscode. |

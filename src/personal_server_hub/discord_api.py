@@ -3,7 +3,8 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from commands import server, finance, accounts
+from src.personal_server_hub.commands import server
+from src.personal_server_hub.commands import accounts, finance
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 DISCORD_MESSAGE_CONTENT_LIMIT = 2000
@@ -51,7 +52,7 @@ def handle_interaction(body: dict, context=None) -> dict:
                 }
 
             # Import erst hier lokal, um zirkuläre Ladekonflikte beim Booten zu verhindern
-            import rest_api
+            import src.personal_server_hub.rest_api as rest_api
             status, resp = rest_api.handle_server_delete({
                 "server_name": server_slug,
                 "discord_user_id": caller_id

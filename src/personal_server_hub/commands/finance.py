@@ -1,7 +1,7 @@
 import re
 import datetime
-import rest_api
-from services.supabase import supabase_client_request
+import src.personal_server_hub.rest_api as rest_api
+from src.personal_server_hub.services.supabase import supabase_client_request
 
 def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
     import json

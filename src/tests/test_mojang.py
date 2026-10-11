@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch, MagicMock
-from services import mojang
-import rest_api
+from src.personal_server_hub.services import mojang
+import src.personal_server_hub.rest_api as rest_api
 
 def test_format_uuid():
     raw = "069a79f444e94726a5befca90e38aaf5"

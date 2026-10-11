@@ -1,8 +1,8 @@
 import json
 from unittest.mock import patch
 
-import config
-from lambda_function import lambda_handler
+import src.personal_server_hub.config as config
+from src.personal_server_hub.lambda_function import lambda_handler
 
 
 # 1. Security Gatekeeper Test

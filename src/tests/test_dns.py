@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch, MagicMock
-from services import dns
-import rest_api
+from src.personal_server_hub.services import dns
+import src.personal_server_hub.rest_api as rest_api
 
 @patch("urllib.request.urlopen")
 @patch("services.dns.supabase_client_request")

@@ -1,6 +1,6 @@
 import json
 from unittest.mock import patch
-import rest_api
+import src.personal_server_hub.rest_api as rest_api
 
 
 @patch("services.hetzner.list_servers")

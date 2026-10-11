@@ -2,7 +2,7 @@ import os
 import json
 import datetime
 import urllib.request
-from services.supabase import supabase_client_request
+from src.personal_server_hub.services.supabase import supabase_client_request
 
 def get_exchange_rate(
     base_currency: str = "CHF",

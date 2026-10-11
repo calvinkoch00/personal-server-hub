@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock
 from unittest.mock import patch
-import discord_api
+import src.personal_server_hub.discord_api as discord_api
 
 
 def test_handle_interaction_ping():
