@@ -1,0 +1,4 @@
+# Continue.dev ignore list
+.env
+.env.*
+*.env

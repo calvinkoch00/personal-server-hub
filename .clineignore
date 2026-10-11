@@ -1,0 +1,4 @@
+# Cline ignore list
+.env
+.env.*
+*.env

@@ -1,5 +1,7 @@
 # Lokale Umgebungsvariablen & Secrets
 .env
+.env.*
+*.env
 .env*.local
 *.pem
 *.key
