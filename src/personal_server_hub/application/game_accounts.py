@@ -1,7 +1,7 @@
 import json
 
+from personal_server_hub.application.users import get_user, register_user
 from personal_server_hub.services import mojang, supabase
-from personal_server_hub.application.users import register_user
 
 
 def add_game_account(payload: dict) -> tuple[int, dict]:
@@ -22,12 +22,14 @@ def add_game_account(payload: dict) -> tuple[int, dict]:
             return 404, {"error": f"Minecraft-Account `{raw_username}` existiert nicht bei Mojang."}
         username = official_name
 
-    status_user, response_user = register_user(
-        {
-            "discord_user_id": discord_user_id,
-            "discord_username": discord_username,
-        }
-    )
+    status_user, response_user = get_user(discord_user_id)
+    if status_user == 404:
+        status_user, response_user = register_user(
+            {
+                "discord_user_id": discord_user_id,
+                "discord_username": discord_username,
+            }
+        )
     if status_user != 200:
         return status_user, response_user
 

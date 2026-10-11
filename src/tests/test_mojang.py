@@ -30,7 +30,8 @@ def test_get_mojang_profile_success(mock_urlopen):
 def test_handle_addgameaccount_minecraft_success(mock_sb, mock_mojang):
     mock_mojang.return_value = ("069a79f4-44e9-4726-a5be-fca90e38aaf5", "Notch")
     mock_sb.side_effect = [
-        (201, '{"status": "ok"}'), # dim_users upsert
+        (200, "[]"),                # dim_users lookup
+        (201, '{"status": "ok"}'), # dim_users registration
         (200, "[]"),                # existing check
         (201, json.dumps([{"id": "uuid-123"}])) # insert dim_game_accounts
     ]
@@ -66,7 +67,10 @@ def test_handle_addgameaccount_minecraft_not_found(mock_mojang):
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_addgameaccount_stops_when_user_registration_fails(mock_sb, mock_mojang):
     mock_mojang.return_value = ("069a79f4-44e9-4726-a5be-fca90e38aaf5", "Notch")
-    mock_sb.return_value = (401, "Invalid Supabase key")
+    mock_sb.side_effect = [
+        (200, "[]"),
+        (401, "Invalid Supabase key"),
+    ]
 
     status, body = rest_api.handle_addgameaccount({
         "discord_user_id": "123456",
@@ -77,4 +81,4 @@ def test_handle_addgameaccount_stops_when_user_registration_fails(mock_sb, mock_
 
     assert status == 401
     assert "Registrieren des Discord-Nutzers" in body["error"]
-    mock_sb.assert_called_once()
+    assert mock_sb.call_count == 2

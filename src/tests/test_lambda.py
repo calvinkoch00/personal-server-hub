@@ -196,6 +196,35 @@ def test_user_registration_endpoint_is_served_by_fastapi(mock_register_user, aut
     mock_register_user.assert_called_once()
 
 
+@patch(
+    "personal_server_hub.api.routers.users.get_user",
+    return_value=(200, {"discord_user_id": "123456", "discord_username": "calvin"}),
+)
+def test_get_user_endpoint_is_served_by_fastapi(mock_get_user, auth_headers):
+    event = {
+        "version": "2.0",
+        "rawPath": "/users/123456",
+        "rawQueryString": "",
+        "headers": auth_headers,
+        "requestContext": {
+            "http": {
+                "method": "GET",
+                "path": "/users/123456",
+                "protocol": "HTTP/1.1",
+                "sourceIp": "127.0.0.1",
+                "userAgent": "pytest",
+            }
+        },
+        "isBase64Encoded": False,
+    }
+
+    response = lambda_handler(event, None)
+
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["discord_user_id"] == "123456"
+    mock_get_user.assert_called_once_with("123456")
+
+
 # 4. Stop Server Test
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 @patch("personal_server_hub.services.hetzner.delete_server")

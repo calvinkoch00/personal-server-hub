@@ -1,3 +1,5 @@
+import json
+
 from personal_server_hub.services import supabase
 
 
@@ -29,4 +31,37 @@ def register_user(payload: dict) -> tuple[int, dict]:
         "status": "registered",
         "discord_user_id": discord_user_id,
         "discord_username": discord_username,
+    }
+
+def get_user(discord_user_id: str) -> tuple[int, dict]:
+    discord_user_id = str(discord_user_id or "").strip()
+    if not discord_user_id:
+        return 400, {"error": "Feld 'discord_user_id' ist erforderlich"}
+
+    status, response = supabase.supabase_client_request(
+        f"dim_users?discord_user_id=eq.{discord_user_id}",
+        method="GET",
+    )
+    if status != 200:
+        return status, {
+            "error": f"Fehler beim Abrufen des Discord-Nutzers ({status}): {response}"
+        }
+
+    try:
+        users = json.loads(response)
+    except json.JSONDecodeError:
+        return 502, {"error": "Ungültige Antwort beim Abrufen des Discord-Nutzers"}
+
+    if not isinstance(users, list):
+        return 502, {"error": "Ungültige Antwort beim Abrufen des Discord-Nutzers"}
+    if not users:
+        return 404, {"error": f"Discord-Nutzer mit ID '{discord_user_id}' nicht gefunden"}
+
+    user = users[0]
+    if not isinstance(user, dict):
+        return 502, {"error": "Ungültige Antwort beim Abrufen des Discord-Nutzers"}
+
+    return 200, {
+        "discord_user_id": user.get("discord_user_id"),
+        "discord_username": user.get("discord_username"),
     }
