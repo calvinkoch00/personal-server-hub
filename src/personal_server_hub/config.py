@@ -69,6 +69,7 @@ DISCORD_STATUS_WEBHOOK_URL="{discord_status}"
 DISCORD_LOG_WEBHOOK_URL="{discord_log}"
 SUPABASE_URL="{supabase_url}"
 SUPABASE_KEY="{supabase_key}"
+GITHUB_REPO_RAW="{github_repo}"
 EOF_SECRETS
 chmod 600 "$MOUNT_DIR/secrets.env"
 
@@ -83,7 +84,7 @@ export GITHUB_REPO="{github_repo}"
 mkdir -p /opt/bootstrap
 echo "[STAGE-1] Lade bootstrap.sh..."
 curl -sSL -H "Cache-Control: no-cache" \\
-  "$GITHUB_REPO/hetzner/bootstrap.sh?ts=$(date +%s)" \\
+  "$GITHUB_REPO/src/vm_agent/bootstrap.sh?ts=$(date +%s)" \\
   -o /opt/bootstrap/bootstrap.sh
 
 chmod +x /opt/bootstrap/bootstrap.sh

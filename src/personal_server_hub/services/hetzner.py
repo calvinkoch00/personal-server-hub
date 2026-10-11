@@ -3,7 +3,11 @@ import json
 import urllib.request
 import urllib.error
 from personal_server_hub.config import HETZNER_API_TOKEN, get_stage1_bootloader, get_game_config
-from personal_server_hub.services.dns import fallback_server_subdomain, update_godaddy_dns
+from personal_server_hub.services.dns import (
+    environment_subdomain,
+    fallback_server_subdomain,
+    update_godaddy_dns,
+)
 from personal_server_hub.services.supabase import log_server_start_to_supabase, supabase_client_request
 
 BASE_URL = "https://api.hetzner.cloud/v1"
@@ -69,7 +73,9 @@ def create_server(
             f"dim_dns_records?server_id=eq.{db_server_id}&select=subdomain", method="GET"
         )
         if status_dns == 200 and json.loads(resp_dns):
-            subdomain = json.loads(resp_dns)[0].get("subdomain")
+            linked_subdomain = json.loads(resp_dns)[0].get("subdomain")
+            if linked_subdomain:
+                subdomain = environment_subdomain(linked_subdomain)
 
     if not subdomain:
         subdomain = fallback_server_subdomain(clean_game, clean_slug)

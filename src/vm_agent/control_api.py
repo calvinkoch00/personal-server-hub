@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
 set -euo pipefail
 
 AGENT_DIR="/opt/gameserver-agent"
-RAW_BASE="https://raw.githubusercontent.com/calvinkoch00/personal-server-hub/main/hetzner"
+RAW_BASE="${GITHUB_REPO_RAW:-https://raw.githubusercontent.com/calvinkoch00/personal-server-hub/main}/src/vm_agent"
 
 echo "[HOT-RELOAD] Lade Skripte herunter und prüfe Syntax..."
 

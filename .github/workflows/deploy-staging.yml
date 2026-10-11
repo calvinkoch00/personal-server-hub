@@ -1,0 +1,147 @@
+name: Sync staging secrets and deploy Lambda
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for Discord command changes
+        id: changed-files
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            src/scripts/register_discord_commands.py
+            src/scripts/discord_commands.json
+
+      - name: Install Lambda dependencies
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          python -m pip install --upgrade pip
+          pip install --target ./package -r requirements.txt
+
+      - name: Get staging application settings from Bitwarden
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_STAGING_ACCESS_TOKEN }}
+          secrets: |
+            df734b90-7613-4da9-9984-b4e00107aff1 > AUTH_SECRET
+            96d1aea2-1946-4664-a1d8-b4e0010ada23 > AWS_REGION
+            d2d42c4f-2b6a-41d0-bae2-b4e000ffd176 > DISCORD_APPLICATION_ID
+            12b4df52-d6ea-42a0-8813-b4e001000aa0 > DISCORD_LOG_WEBHOOK_URL
+            46b179dc-a925-4081-97e3-b4e000ffdd6c > DISCORD_PUBLIC_KEY
+            d12cb812-932e-4fa0-a778-b4e000ffff6c > DISCORD_STATUS_WEBHOOK_URL
+            dd7892da-3f27-4beb-a97f-b4e001001ad5 > GITHUB_REPO_RAW
+            07923ec8-1266-43be-822c-b4e001007fff > GODADDY_API_KEY
+            a83b8786-693f-47f2-8556-b4e001008e1f > GODADDY_API_SECRET
+            45ca1176-c0c6-460c-9e58-b4e001009919 > GODADDY_DOMAIN
+            f25be3bf-89f2-4f12-8743-b4e000fdb261 > HETZNER_API_TOKEN
+            01bd43fa-da9d-4a89-85b0-b4e001004012 > SUPABASE_KEY
+            769fffce-742d-4d54-a31d-b4e00100342e > SUPABASE_URL
+
+      - name: Export AWS region for credentials action
+        id: aws-region
+        run: echo "region=$AWS_REGION" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.STAGING_AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ steps.aws-region.outputs.region }}
+
+      - name: Get staging Discord bot token from Bitwarden
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && steps.changed-files.outputs.any_changed == 'true')
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_STAGING_ACCESS_TOKEN }}
+          secrets: |
+            1124bf1c-12e1-48b1-ae22-b4e00100b363 > DISCORD_BOT_TOKEN
+
+      - name: Register staging Discord commands
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && steps.changed-files.outputs.any_changed == 'true')
+        run: python src/scripts/register_discord_commands.py
+
+      - name: Sync staging Lambda runtime secrets to AWS
+        id: sync-secret
+        env:
+          LAMBDA_RUNTIME_SECRET_ARN: ${{ vars.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
+        run: |
+          set +x
+          umask 077
+          SECRET_FILE="$RUNNER_TEMP/lambda-runtime-secrets.json"
+          trap 'rm -f "$SECRET_FILE"' EXIT
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          names = (
+              "AUTH_SECRET",
+              "DISCORD_APPLICATION_ID",
+              "DISCORD_LOG_WEBHOOK_URL",
+              "DISCORD_PUBLIC_KEY",
+              "DISCORD_STATUS_WEBHOOK_URL",
+              "GITHUB_REPO_RAW",
+              "GODADDY_API_KEY",
+              "GODADDY_API_SECRET",
+              "GODADDY_DOMAIN",
+              "HETZNER_API_TOKEN",
+              "SUPABASE_KEY",
+              "SUPABASE_URL",
+          )
+          values = {name: os.environ[name] for name in names}
+          values["DNS_SUBDOMAIN_PREFIX"] = "staging-"
+          Path(os.environ["RUNNER_TEMP"], "lambda-runtime-secrets.json").write_text(
+              json.dumps(values), encoding="utf-8"
+          )
+          PY
+          version_id="$(aws secretsmanager put-secret-value \
+            --secret-id "$LAMBDA_RUNTIME_SECRET_ARN" \
+            --secret-string "file://$SECRET_FILE" \
+            --query VersionId \
+            --output text)"
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Package Lambda
+        run: |
+          cp -R src/personal_server_hub ./package/personal_server_hub
+          printf '%s\n' 'from personal_server_hub.lambda_function import lambda_handler' > ./package/lambda_function.py
+          (cd package && zip -qr ../deployment_package.zip .)
+
+      - name: Deploy staging Lambda code
+        run: |
+          aws lambda update-function-code \
+            --function-name personal-server-hub-api-staging \
+            --zip-file fileb://deployment_package.zip
+          aws lambda wait function-updated --function-name personal-server-hub-api-staging
+
+      - name: Refresh staging Lambda configuration
+        env:
+          LAMBDA_RUNTIME_SECRET_ARN: ${{ vars.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
+          SECRET_VERSION_ID: ${{ steps.sync-secret.outputs.version_id }}
+        run: |
+          aws lambda update-function-configuration \
+            --function-name personal-server-hub-api-staging \
+            --handler personal_server_hub.lambda_function.lambda_handler \
+            --environment "Variables={APP_SECRETS_ARN=$LAMBDA_RUNTIME_SECRET_ARN,SECRET_VERSION_ID=$SECRET_VERSION_ID}"
+          aws lambda wait function-updated --function-name personal-server-hub-api-staging

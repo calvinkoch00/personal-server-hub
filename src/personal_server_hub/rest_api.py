@@ -258,8 +258,10 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
                     supabase.supabase_client_request("map_server_whitelist", method="POST", data=wl_payload)
                     creator_accounts_added.append(uname)
 
-    sub_to_use = (custom_subdomain.strip().lower() if custom_subdomain else raw_slug)
-    if srv_id and sub_to_use != f"{game}-default":
+    sub_to_use = dns.environment_subdomain(
+        custom_subdomain.strip().lower() if custom_subdomain else raw_slug
+    )
+    if srv_id and (custom_subdomain or raw_slug != f"{game}-default"):
         dns.update_godaddy_dns("0.0.0.0", subdomain=sub_to_use, server_id=srv_id)
 
     created_server["subdomain"] = sub_to_use
@@ -304,10 +306,10 @@ def handle_server_delete(payload: dict) -> tuple[int, dict]:
     if status_dns == 200:
         for d in json.loads(resp_dns):
             if d.get("subdomain"):
-                subdomains_to_delete.add(d["subdomain"])
+                subdomains_to_delete.add(dns.environment_subdomain(d["subdomain"]))
 
     # Fallback: Falls Subdomain gleich raw_slug war
-    subdomains_to_delete.add(raw_slug)
+    subdomains_to_delete.add(dns.environment_subdomain(raw_slug))
 
     # 3. DNS-Records bei GoDaddy und in dim_dns_records aufräumen
     for sub in subdomains_to_delete:

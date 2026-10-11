@@ -14,7 +14,9 @@ def test_fallback_server_subdomain_uses_game_default_or_slug():
 @patch("personal_server_hub.services.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")
 @patch("personal_server_hub.services.hetzner.update_godaddy_dns")
-def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
+def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb, monkeypatch):
+    monkeypatch.setenv("GODADDY_DOMAIN", "calvinkoch.ch")
+
     server_meta = [{
         "server_id": "srv-1234",
         "hetzner_volume_id": 99999999,
@@ -60,8 +62,10 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
 @patch("urllib.request.urlopen")
 @patch("personal_server_hub.services.hetzner.update_godaddy_dns")
 def test_create_server_uses_game_default_when_no_dns_record(
-    mock_dns, mock_urlopen, mock_sb
+    mock_dns, mock_urlopen, mock_sb, monkeypatch
 ):
+    monkeypatch.setenv("GODADDY_DOMAIN", "calvinkoch.ch")
+
     mock_sb.side_effect = [
         (200, json.dumps([{
             "server_id": "srv-default",

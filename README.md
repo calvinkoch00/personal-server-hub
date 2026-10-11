@@ -324,6 +324,18 @@ Der Workflow benötigt außerdem das oben beschriebene GitHub Actions Secret `BW
 
 Die IAM User `github-lambda-deployer` in den Screenshots ist kein OIDC-Role. Lass ihn bestehen, bis ein Push oder manueller Workflow-Lauf mit OIDC erfolgreich war. Danach können seine alten Access Keys widerrufen und der Benutzer entfernt werden, falls er sonst nicht verwendet wird.
 
+### 3a. Staging mit eigener Lambda verbinden
+
+Staging verwendet den separaten Workflow [`.github/workflows/deploy-staging.yml`](./.github/workflows/deploy-staging.yml) und das Template [`infra/staging-github-actions-oidc.yml`](./infra/staging-github-actions-oidc.yml). Der Workflow läuft nur bei Pushes auf `staging` oder einem manuellen Start. Seine IAM-Rolle vertraut nur dem Branch `staging` und darf nur die Funktion `personal-server-hub-api-staging` sowie das Runtime-Secret `personal-server-hub/staging/lambda-runtime` aktualisieren. Der Produktionsworkflow und seine AWS-Rolle bleiben davon getrennt.
+
+1. Prüfe in derselben AWS-Region wie die Staging-Lambda (`eu-central-1`), ob der GitHub OIDC Provider bereits in IAM angelegt ist. Wenn ja, setze beim CloudFormation-Stack-Deployment `CreateGitHubOidcProvider` auf `false`; andernfalls auf `true`.
+2. Erstelle aus dem Staging-Template einen separaten CloudFormation-Stack. Bestätige dabei, dass `LambdaFunctionName` und `LambdaExecutionRoleName` exakt zur Staging-Lambda bzw. ihrer Execution Role passen.
+3. Hinterlege die Outputs `StagingGitHubActionsDeployRoleArn` und `StagingRuntimeSecretArn` in GitHub unter **Settings → Secrets and variables → Actions → Variables** als `STAGING_AWS_DEPLOY_ROLE_ARN` bzw. `STAGING_LAMBDA_RUNTIME_SECRET_ARN`.
+4. Lege den staging-only Bitwarden Machine-Account-Token als GitHub Actions Secret `BW_STAGING_ACCESS_TOKEN` an. Der Machine Account darf nur das Staging-Projekt lesen. Die Secret-IDs im Workflow müssen ebenfalls aus diesem Staging-Projekt stammen.
+5. Prüfe in Bitwarden, dass `GITHUB_REPO_RAW` den Raw-Content-Basis-URL des Branches angibt, zum Beispiel `https://raw.githubusercontent.com/calvinkoch00/personal-server-hub/staging`. Der Bootstrap-Pfad wird im Code ergänzt. `DISCORD_BOT_TOKEN` wird nur zur Registrierung der Commands der Staging-Discord-App verwendet und nicht an Lambda übertragen.
+
+Der Workflow synchronisiert nur die Staging-Einträge in das Staging-Secrets-Manager-Secret. Er fügt zusätzlich `DNS_SUBDOMAIN_PREFIX=staging-` hinzu: DNS-Schreib-/Löschvorgänge und DNS-Synchronisierung bleiben dadurch auf `staging-`-Records beschränkt. Nutze weiterhin ausschließlich das Staging-Supabase-Projekt und ein Hetzner-Token des separaten Staging-Projekts. Der Workflow wurde nicht automatisch in AWS ausgerollt; der Stack muss erst in AWS erstellt und die GitHub-Variablen müssen gesetzt werden.
+
 ### 4. Lambda Runtime-Konfiguration
 
 Das Deployment packt `src/personal_server_hub/` zusammen mit den Abhängigkeiten. Der konfigurierte Handler lautet `personal_server_hub.lambda_function.lambda_handler`; ein Kompatibilitäts-Handler `lambda_function.lambda_handler` ist im Paket enthalten, damit der Code- und Handlerwechsel beim ersten Rollout ohne Unterbrechung möglich ist.

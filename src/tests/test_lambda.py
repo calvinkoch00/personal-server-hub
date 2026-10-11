@@ -121,7 +121,7 @@ def test_stage1_bootloader_generation():
     assert 'MAX_SECONDS="600"' in script
     assert 'ENABLE_LOGGING="none"' in script
     assert "$MOUNT_DIR/secrets.env" in script
-    assert "hetzner/bootstrap.sh" in script
+    assert "src/vm_agent/bootstrap.sh" in script
     assert "exec /opt/bootstrap/bootstrap.sh" in script
 
 

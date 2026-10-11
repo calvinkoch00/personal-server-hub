@@ -7,13 +7,22 @@ from personal_server_hub.services.supabase import supabase_client_request
 GODADDY_API_KEY = os.environ.get("GODADDY_API_KEY")
 GODADDY_API_SECRET = os.environ.get("GODADDY_API_SECRET")
 GODADDY_DOMAIN = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
+DNS_SUBDOMAIN_PREFIX = os.environ.get("DNS_SUBDOMAIN_PREFIX", "").strip().lower()
+
+
+def environment_subdomain(subdomain: str) -> str:
+    normalized_subdomain = subdomain.strip().lower()
+    if DNS_SUBDOMAIN_PREFIX and not normalized_subdomain.startswith(DNS_SUBDOMAIN_PREFIX):
+        return f"{DNS_SUBDOMAIN_PREFIX}{normalized_subdomain}"
+    return normalized_subdomain
+
 
 def fallback_server_subdomain(game: str, server_slug: str) -> str:
     normalized_game = game.strip().lower()
     normalized_slug = server_slug.strip().lower()
     if normalized_slug in {"default", f"{normalized_game}-default"}:
-        return f"{normalized_game}-default"
-    return normalized_slug
+        return environment_subdomain(f"{normalized_game}-default")
+    return environment_subdomain(normalized_slug)
 
 
 def _get_headers() -> dict:
@@ -22,13 +31,14 @@ def _get_headers() -> dict:
         "Content-Type": "application/json"
     }
 
+
 def update_godaddy_dns(ip: str, subdomain: str, server_id: str | None = None) -> bool:
     """Aktualisiert exakt eine Subdomain bei GoDaddy und katalogisiert sie in Supabase."""
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:
         print("[DNS ERROR] GoDaddy API Keys fehlen in Umgebungsvariablen.")
         return False
 
-    target_sub = subdomain.strip().lower()
+    target_sub = environment_subdomain(subdomain)
     domain = GODADDY_DOMAIN
 
     url = f"https://api.godaddy.com/v1/domains/{domain}/records/A/{target_sub}"
@@ -81,7 +91,7 @@ def delete_godaddy_dns(subdomain: str) -> bool:
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:
         return False
 
-    sub = subdomain.strip().lower()
+    sub = environment_subdomain(subdomain)
     url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records/A/{sub}"
     req = urllib.request.Request(url, headers=_get_headers(), method="DELETE")
 
@@ -98,6 +108,7 @@ def delete_godaddy_dns(subdomain: str) -> bool:
     )
     return True
 
+
 def find_subdomains_by_ip(target_ip: str) -> list[str]:
     """Sucht direkt bei GoDaddy nach Subdomains, deren A-Record auf target_ip zeigt."""
     if not target_ip or target_ip in ["0.0.0.0", "127.0.0.1"]:
@@ -113,12 +124,20 @@ def find_subdomains_by_ip(target_ip: str) -> list[str]:
             for r in records:
                 if str(r.get("data", "")).strip() == str(target_ip).strip():
                     name = r.get("name")
-                    if name and name != "@":
+                    if (
+                        name
+                        and name != "@"
+                        and (
+                            not DNS_SUBDOMAIN_PREFIX
+                            or name.lower().startswith(DNS_SUBDOMAIN_PREFIX)
+                        )
+                    ):
                         matched.append(name)
             return matched
     except Exception as e:
         print(f"[DNS LOOKUP ERROR] Konnte GoDaddy Records nicht prüfen: {e}")
         return []
+
 
 def sync_all_dns_from_godaddy() -> dict:
     """Holt alle Records von GoDaddy und speichert sie gespiegelt in dim_dns_records."""
@@ -143,6 +162,8 @@ def sync_all_dns_from_godaddy() -> dict:
             continue
 
         sub = rec.get("name", "").lower()
+        if DNS_SUBDOMAIN_PREFIX and not sub.startswith(DNS_SUBDOMAIN_PREFIX):
+            continue
         used_for = "game-server" if sub in ["mc", "minecraft"] or "server" in sub else "other"
         if sub in ["@", "www"]:
             used_for = "website"

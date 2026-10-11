@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GitHub Actions OIDC deployment role and runtime permissions for staging.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: calvinkoch00/personal-server-hub
+  GitHubBranch:
+    Type: String
+    Default: staging
+  LambdaFunctionName:
+    Type: String
+    Default: personal-server-hub-api-staging
+  LambdaExecutionRoleName:
+    Type: String
+    Default: personal-server-hub-api-staging-role-geehc90
+  RuntimeSecretName:
+    Type: String
+    Default: personal-server-hub/staging/lambda-runtime
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set false if token.actions.githubusercontent.com is already an IAM OIDC provider.
+
+Conditions:
+  ShouldCreateGitHubOidcProvider: !Equals [!Ref CreateGitHubOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateGitHubOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  StagingRuntimeSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Ref RuntimeSecretName
+      Description: Staging runtime configuration synchronized from Bitwarden.
+      SecretString: '{"setup":"replace-on-first-sync"}'
+
+  StagingGitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: personal-server-hub-github-actions-staging
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}
+      Policies:
+        - PolicyName: deploy-staging-and-sync-staging-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunctionName}
+              - Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref StagingRuntimeSecret
+
+  StagingLambdaPermissions:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: personal-server-hub-staging-runtime-access
+      Roles:
+        - !Ref LambdaExecutionRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref StagingRuntimeSecret
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunctionName}
+
+Outputs:
+  StagingGitHubActionsDeployRoleArn:
+    Description: Set as the GitHub Actions variable STAGING_AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt StagingGitHubActionsDeployRole.Arn
+  StagingRuntimeSecretArn:
+    Description: Set as the GitHub Actions variable STAGING_LAMBDA_RUNTIME_SECRET_ARN.
+    Value: !Ref StagingRuntimeSecret
+  StagingLambdaFunctionName:
+    Value: !Ref LambdaFunctionName
