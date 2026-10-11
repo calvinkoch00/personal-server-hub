@@ -13,7 +13,7 @@ Parameters:
     Default: personal-server-hub-api-staging
   LambdaExecutionRoleName:
     Type: String
-    Default: personal-server-hub-api-staging-role-geehc90
+    Default: personal-server-hub-api-staging-role-geethc90
   RuntimeSecretName:
     Type: String
     Default: personal-server-hub/staging/lambda-runtime
