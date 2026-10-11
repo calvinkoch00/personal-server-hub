@@ -41,9 +41,11 @@ jobs:
           pip install --target ./package -r requirements.txt
 
       - name: Get staging application settings from Bitwarden
-        uses: bitwarden/sm-action@v2
+        id: staging-settings
+        uses: bitwarden/sm-action@v3.0.1
         with:
           access_token: ${{ secrets.BW_STAGING_ACCESS_TOKEN }}
+          set_env: true
           secrets: |
             df734b90-7613-4da9-9984-b4e00107aff1 > AUTH_SECRET
             96d1aea2-1946-4664-a1d8-b4e0010ada23 > AWS_REGION
@@ -58,15 +60,22 @@ jobs:
             f25be3bf-89f2-4f12-8743-b4e000fdb261 > HETZNER_API_TOKEN
             01bd43fa-da9d-4a89-85b0-b4e001004012 > SUPABASE_KEY
             769fffce-742d-4d54-a31d-b4e00100342e > SUPABASE_URL
+            bc3e1048-cdbd-4339-9033-b4e00116e543 > STAGING_AWS_DEPLOY_ROLE_ARN
+            4a19b9ab-0890-4a78-8e4c-b4e001170129 > STAGING_LAMBDA_RUNTIME_SECRET_ARN
 
       - name: Export AWS region for credentials action
         id: aws-region
         run: echo "region=$AWS_REGION" >> "$GITHUB_OUTPUT"
 
+      - name: Validate staging AWS settings
+        run: |
+          test -n "$STAGING_AWS_DEPLOY_ROLE_ARN" || { echo "STAGING_AWS_DEPLOY_ROLE_ARN was not loaded from Bitwarden"; exit 1; }
+          test -n "$STAGING_LAMBDA_RUNTIME_SECRET_ARN" || { echo "STAGING_LAMBDA_RUNTIME_SECRET_ARN was not loaded from Bitwarden"; exit 1; }
+
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.STAGING_AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ steps.staging-settings.outputs.STAGING_AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ steps.aws-region.outputs.region }}
 
       - name: Get staging Discord bot token from Bitwarden
@@ -84,7 +93,7 @@ jobs:
       - name: Sync staging Lambda runtime secrets to AWS
         id: sync-secret
         env:
-          LAMBDA_RUNTIME_SECRET_ARN: ${{ vars.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
+          LAMBDA_RUNTIME_SECRET_ARN: ${{ steps.staging-settings.outputs.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
         run: |
           set +x
           umask 077
@@ -137,7 +146,7 @@ jobs:
 
       - name: Refresh staging Lambda configuration
         env:
-          LAMBDA_RUNTIME_SECRET_ARN: ${{ vars.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
+          LAMBDA_RUNTIME_SECRET_ARN: ${{ steps.staging-settings.outputs.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
           SECRET_VERSION_ID: ${{ steps.sync-secret.outputs.version_id }}
         run: |
           aws lambda update-function-configuration \
