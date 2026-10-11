@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from personal_server_hub.services import supabase
 from personal_server_hub.services import agent, dns, fx, hetzner, mojang
+from personal_server_hub.application.game_accounts import add_game_account
 
 def resolve_server_slug(raw_name: str | None, game: str = "minecraft") -> str:
     cleaned = str(raw_name or "").strip().lower().replace(" ", "_")
@@ -444,71 +445,7 @@ def handle_cash(payload: dict) -> tuple[int, dict]:
     return status_p, {"error": f"Fehler beim Speichern der Zahlung ({status_p}): {resp_p}"}
 
 def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
-    discord_user_id = str(payload.get("discord_user_id"))
-    discord_username = str(payload.get("discord_username", "Unknown"))
-    game = str(payload.get("game", "")).strip().lower()
-    raw_username = str(payload.get("username", "")).strip()
-
-    if not game or not raw_username:
-        return 400, {"error": "Felder 'game' und 'username' sind erforderlich"}
-
-    mojang_uuid = None
-    username = raw_username
-
-    if game == "minecraft":
-        mojang_uuid, official_name = mojang.get_mojang_profile(raw_username)
-        if not mojang_uuid:
-            return 404, {"error": f"Minecraft-Account `{raw_username}` existiert nicht bei Mojang."}
-        username = official_name
-
-    supabase.supabase_client_request(
-        "dim_users",
-        method="POST",
-        data={"discord_user_id": discord_user_id, "discord_username": discord_username},
-        headers_extra={"Prefer": "resolution=merge-duplicates"}
-    )
-
-    endpoint_check = f"dim_game_accounts?game=eq.{game}&ingame_username=ilike.{username}&select=discord_user_id,mojang_uuid"
-    status_check, resp_check = supabase.supabase_client_request(endpoint_check, method="GET")
-    existing_accounts = json.loads(resp_check) if status_check == 200 else []
-
-    if existing_accounts:
-        owner_id = str(existing_accounts[0].get("discord_user_id"))
-        if owner_id == discord_user_id:
-            if mojang_uuid and not existing_accounts[0].get("mojang_uuid"):
-                supabase.supabase_client_request(
-                    f"dim_game_accounts?discord_user_id=eq.{discord_user_id}&game=eq.{game}&ingame_username=ilike.{username}",
-                    method="PATCH",
-                    data={"mojang_uuid": mojang_uuid}
-                )
-            return 200, {
-                "status": "already_linked_self",
-                "game": game,
-                "username": username,
-                "mojang_uuid": mojang_uuid
-            }
-        return 403, {"status": "forbidden", "game": game, "username": username}
-
-    account_payload = {
-        "discord_user_id": discord_user_id,
-        "game": game,
-        "ingame_username": username,
-        "mojang_uuid": mojang_uuid
-    }
-    status_a, resp_a = supabase.supabase_client_request(
-        "dim_game_accounts",
-        method="POST",
-        data=account_payload,
-        headers_extra={"Prefer": "return=representation"}
-    )
-    if status_a in [200, 201]:
-        return 200, {
-            "status": "created",
-            "game": game,
-            "username": username,
-            "mojang_uuid": mojang_uuid
-        }
-    return status_a, {"error": f"Fehler beim Verknüpfen ({status_a}): {resp_a}"}
+    return add_game_account(payload)
 
 def handle_dns_sync(payload: dict) -> tuple[int, dict]:
     res = dns.sync_all_dns_from_godaddy()

@@ -107,7 +107,10 @@ def lambda_handler(event, context):
         return json_response(401, {"error": "Unauthorized"})
 
     raw_path = event.get("rawPath") or event.get("path") or "/"
-    if raw_path.rstrip("/") == "/help" and http_method == "GET":
+    if (
+        (raw_path.rstrip("/") == "/help" and http_method == "GET")
+        or (raw_path.rstrip("/") == "/game-accounts" and http_method == "POST")
+    ):
         return asgi_handler(event, context)
 
     body = {}

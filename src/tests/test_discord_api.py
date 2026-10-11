@@ -102,6 +102,46 @@ def test_handle_interaction_whitelist_subcommand(mock_wl):
     )
 
 
+@patch("personal_server_hub.commands.accounts.add_game_account")
+def test_addgameaccount_command_uses_shared_application_operation(mock_add_game_account):
+    mock_add_game_account.return_value = (
+        200,
+        {
+            "status": "created",
+            "game": "minecraft",
+            "username": "Notch",
+            "mojang_uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+        },
+    )
+    payload = {
+        "type": 2,
+        "data": {
+            "name": "addgameaccount",
+            "options": [
+                {"name": "game", "value": "minecraft"},
+                {"name": "username", "value": "Notch"},
+            ],
+        },
+        "member": {
+            "user": {"id": "123456", "username": "Calvin"}
+        },
+    }
+
+    response = discord_api.handle_interaction(payload)
+
+    assert response["body"]["data"]["content"].startswith(
+        "✅ Ingame-Account `Notch`"
+    )
+    mock_add_game_account.assert_called_once_with(
+        {
+            "discord_user_id": "123456",
+            "discord_username": "Calvin",
+            "game": "minecraft",
+            "username": "Notch",
+        }
+    )
+
+
 @patch("personal_server_hub.discord_api.urllib.request.urlopen")
 @patch("personal_server_hub.discord_api.handle_interaction")
 def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):

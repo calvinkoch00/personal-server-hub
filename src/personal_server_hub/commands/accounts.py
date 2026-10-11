@@ -1,5 +1,6 @@
 import json
 import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.game_accounts import add_game_account
 from personal_server_hub.commands.finance import resolve_discord_user_id
 from personal_server_hub.services.supabase import supabase_client_request
 
@@ -120,7 +121,7 @@ def handle_addgameaccount(data: dict, caller_id: str, caller_data: dict) -> str:
         return "❌ Bitte gib Spiel und Ingame-Namen an: `/addgameaccount <game> <username>`"
 
     try:
-        status, resp = rest_api.handle_addgameaccount({
+        status, resp = add_game_account({
             "discord_user_id": discord_user_id,
             "discord_username": discord_username,
             "game": game,

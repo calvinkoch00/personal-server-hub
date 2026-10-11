@@ -117,6 +117,45 @@ def test_help_endpoint_still_requires_authentication():
     assert response["statusCode"] == 401
 
 
+@patch(
+    "personal_server_hub.api.routers.game_accounts.add_game_account",
+    return_value=(200, {"status": "created", "game": "minecraft", "username": "Notch"}),
+)
+def test_game_accounts_endpoint_is_served_by_fastapi(mock_add_game_account, auth_headers):
+    event = {
+        "version": "2.0",
+        "rawPath": "/game-accounts",
+        "rawQueryString": "",
+        "headers": {**auth_headers, "content-type": "application/json"},
+        "requestContext": {
+            "http": {
+                "method": "POST",
+                "path": "/game-accounts",
+                "protocol": "HTTP/1.1",
+                "sourceIp": "127.0.0.1",
+                "userAgent": "pytest",
+            }
+        },
+        "body": json.dumps({
+            "discord_user_id": "123456",
+            "discord_username": "calvin",
+            "game": "minecraft",
+            "username": "Notch",
+        }),
+        "isBase64Encoded": False,
+    }
+
+    response = lambda_handler(event, None)
+
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {
+        "status": "created",
+        "game": "minecraft",
+        "username": "Notch",
+    }
+    mock_add_game_account.assert_called_once()
+
+
 # 4. Stop Server Test
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 @patch("personal_server_hub.services.hetzner.delete_server")

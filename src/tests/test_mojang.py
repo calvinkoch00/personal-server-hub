@@ -60,3 +60,21 @@ def test_handle_addgameaccount_minecraft_not_found(mock_mojang):
 
     assert status == 404
     assert "existiert nicht bei Mojang" in body["error"]
+
+
+@patch("personal_server_hub.services.mojang.get_mojang_profile")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
+def test_handle_addgameaccount_stops_when_user_registration_fails(mock_sb, mock_mojang):
+    mock_mojang.return_value = ("069a79f4-44e9-4726-a5be-fca90e38aaf5", "Notch")
+    mock_sb.return_value = (401, "Invalid Supabase key")
+
+    status, body = rest_api.handle_addgameaccount({
+        "discord_user_id": "123456",
+        "discord_username": "calvin",
+        "game": "minecraft",
+        "username": "notch",
+    })
+
+    assert status == 401
+    assert "Registrieren des Discord-Nutzers" in body["error"]
+    mock_sb.assert_called_once()
