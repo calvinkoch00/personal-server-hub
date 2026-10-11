@@ -1,17 +1,23 @@
-name: Deploy Hetzner Server Controller & Discord Commands
+name: Sync Bitwarden secrets and deploy Lambda
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -19,48 +25,126 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Check for Discord Script Changes
+      - name: Check for Discord command changes
         id: changed-files
+        if: github.event_name == 'push'
         uses: tj-actions/changed-files@v44
         with:
           files: |
-            scripts/register_discord_commands.py
-            scripts/discord_commands.json
+            src/scripts/register_discord_commands.py
+            src/scripts/discord_commands.json
 
-      - name: Register Discord Commands & Update Cache
-        # Läuft bei Änderungen am Skript ODER manuellem Trigger
-        if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch'
-        env:
-          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: |
-          echo "Changes detected: updating Discord commands and building cache..."
-          python3 scripts/register_discord_commands.py
-
-      - name: Install Dependencies
+      - name: Install Lambda dependencies
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           python -m pip install --upgrade pip
           pip install --target ./package -r requirements.txt
-          # Kopiert aws_lambda inklusive der commands_cache.txt in das Paket
-          cp -r aws_lambda/* ./package/
 
-      - name: Create Deployment Package
-        run: |
-          cd package
-          zip -r ../deployment_package.zip .
-          cd ..
+      - name: Get application settings from Bitwarden
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+          secrets: |
+            03cbca9b-ae74-4e44-8514-b4de00895f36 > AUTH_SECRET
+            69b8cde0-8ba1-4f2c-a5fb-b4de008d60b9 > AWS_REGION
+            94789d40-13ab-465e-94b2-b4de00896051 > DISCORD_APPLICATION_ID
+            efe9214d-3ecf-4be5-990b-b4de008962bc > DISCORD_LOG_WEBHOOK_URL
+            8ea3b8bb-1b76-4849-9a86-b4de0089609f > DISCORD_PUBLIC_KEY
+            08e59c3f-1d04-4941-ba8b-b4de00896142 > DISCORD_STATUS_WEBHOOK_URL
+            f92240d0-7f6e-426d-b3c0-b4de0089656b > GITHUB_REPO_RAW
+            68843147-0442-4661-9676-b4de00896302 > GODADDY_API_KEY
+            c093ffe5-bfec-4f20-be8f-b4de0089634d > GODADDY_API_SECRET
+            2f6ee881-0784-416b-a902-b4de008963da > GODADDY_DOMAIN
+            45bc5e28-b51f-4252-97bd-b4de00895de2 > HETZNER_API_TOKEN
+            bb10902a-fdcb-4b70-885f-b4de008964cd > SUPABASE_KEY
+            a4016460-a89e-4752-9381-b4de00896476 > SUPABASE_URL
 
-      - name: Configure AWS Credentials
+      - name: Export AWS region for credentials action
+        id: aws-region
+        run: echo "region=$AWS_REGION" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-central-1
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ steps.aws-region.outputs.region }}
 
-      - name: Deploy to AWS Lambda
+      - name: Register Discord commands
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && steps.changed-files.outputs.any_changed == 'true')
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+          secrets: |
+            2ff6a4f5-dd87-472b-9c1b-b4de008960e9 > DISCORD_BOT_TOKEN
+
+      - name: Publish Discord commands
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && steps.changed-files.outputs.any_changed == 'true')
+        run: python src/scripts/register_discord_commands.py
+
+      - name: Sync Lambda runtime secrets to AWS
+        id: sync-secret
+        env:
+          LAMBDA_RUNTIME_SECRET_ARN: ${{ vars.LAMBDA_RUNTIME_SECRET_ARN }}
+        run: |
+          set +x
+          umask 077
+          SECRET_FILE="$RUNNER_TEMP/lambda-runtime-secrets.json"
+          trap 'rm -f "$SECRET_FILE"' EXIT
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          names = (
+              "AUTH_SECRET",
+              "DISCORD_APPLICATION_ID",
+              "DISCORD_LOG_WEBHOOK_URL",
+              "DISCORD_PUBLIC_KEY",
+              "DISCORD_STATUS_WEBHOOK_URL",
+              "GITHUB_REPO_RAW",
+              "GODADDY_API_KEY",
+              "GODADDY_API_SECRET",
+              "GODADDY_DOMAIN",
+              "HETZNER_API_TOKEN",
+              "SUPABASE_KEY",
+              "SUPABASE_URL",
+          )
+          values = {name: os.environ[name] for name in names}
+          Path(os.environ["RUNNER_TEMP"], "lambda-runtime-secrets.json").write_text(
+              json.dumps(values), encoding="utf-8"
+          )
+          PY
+          version_id="$(aws secretsmanager put-secret-value \
+            --secret-id "$LAMBDA_RUNTIME_SECRET_ARN" \
+            --secret-string "file://$SECRET_FILE" \
+            --query VersionId \
+            --output text)"
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Package Lambda
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          cp -R src/personal_server_hub ./package/personal_server_hub
+          printf '%s\n' 'from personal_server_hub.lambda_function import lambda_handler' > ./package/lambda_function.py
+          (cd package && zip -qr ../deployment_package.zip .)
+
+      - name: Deploy Lambda code
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           aws lambda update-function-code \
             --function-name hetzner-server-controller \
             --zip-file fileb://deployment_package.zip
+          aws lambda wait function-updated --function-name hetzner-server-controller
+
+      - name: Refresh Lambda configuration
+        env:
+          LAMBDA_RUNTIME_SECRET_ARN: ${{ vars.LAMBDA_RUNTIME_SECRET_ARN }}
+          SECRET_VERSION_ID: ${{ steps.sync-secret.outputs.version_id }}
+        run: |
+          aws lambda update-function-configuration \
+            --function-name hetzner-server-controller \
+            --handler personal_server_hub.lambda_function.lambda_handler \
+            --environment "Variables={APP_SECRETS_ARN=$LAMBDA_RUNTIME_SECRET_ARN,SECRET_VERSION_ID=$SECRET_VERSION_ID}"
+          aws lambda wait function-updated --function-name hetzner-server-controller

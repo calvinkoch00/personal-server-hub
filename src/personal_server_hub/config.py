@@ -4,7 +4,6 @@ HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 DISCORD_STATUS_WEBHOOK_URL = os.environ.get("DISCORD_STATUS_WEBHOOK_URL", "")
 DISCORD_LOG_WEBHOOK_URL = os.environ.get("DISCORD_LOG_WEBHOOK_URL", "")
-LOCATION = os.environ.get("HETZNER_LOCATION", "nbg1")
 
 DEFAULT_GAME = "minecraft"
 

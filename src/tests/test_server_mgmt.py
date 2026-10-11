@@ -1,7 +1,15 @@
 import json
 from unittest.mock import patch, MagicMock
 from personal_server_hub.services import hetzner
+from personal_server_hub.services.dns import fallback_server_subdomain
 import personal_server_hub.rest_api as rest_api
+
+
+def test_fallback_server_subdomain_uses_game_default_or_slug():
+    assert fallback_server_subdomain("minecraft", "default") == "minecraft-default"
+    assert fallback_server_subdomain("valheim", "valheim-default") == "valheim-default"
+    assert fallback_server_subdomain("minecraft", "skyblock") == "skyblock"
+
 
 @patch("personal_server_hub.services.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")
@@ -11,6 +19,7 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
         "server_id": "srv-1234",
         "hetzner_volume_id": 99999999,
         "hetzner_server_type": "cpx32",
+        "hetzner_location": "fsn1",
         "game_port": 25565,
         "full_name": "server-minecraft-default"
     }]
@@ -41,8 +50,48 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
         assert res["db_server_id"] == "srv-1234"
         assert res["ip"] == "1.2.3.4"
         assert "mc.calvinkoch.ch" in res["domain"]
+        sent_payload = json.loads(mock_urlopen.call_args[0][0].data)
+        assert sent_payload["location"] == "fsn1"
         assert mock_dns.called
         assert mock_log.called
+
+
+@patch("personal_server_hub.services.hetzner.supabase_client_request")
+@patch("urllib.request.urlopen")
+@patch("personal_server_hub.services.hetzner.update_godaddy_dns")
+def test_create_server_uses_game_default_when_no_dns_record(
+    mock_dns, mock_urlopen, mock_sb
+):
+    mock_sb.side_effect = [
+        (200, json.dumps([{
+            "server_id": "srv-default",
+            "hetzner_volume_id": 99999999,
+            "hetzner_server_type": "cpx32",
+            "game_port": 25565,
+        }])),
+        (200, "[]"),
+        (200, '{"status": "ok"}'),
+    ]
+    hetzner_resp = MagicMock()
+    hetzner_resp.read.return_value = json.dumps({
+        "server": {
+            "id": 102,
+            "name": "server-minecraft-default",
+            "status": "initializing",
+            "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+        }
+    }).encode("utf-8")
+    hetzner_resp.__enter__.return_value = hetzner_resp
+    mock_urlopen.return_value = hetzner_resp
+
+    with patch("personal_server_hub.services.hetzner.log_server_start_to_supabase"):
+        result = hetzner.create_server(server_name="default")
+
+    assert result["domain"] == "minecraft-default.calvinkoch.ch"
+    mock_dns.assert_called_once_with(
+        ip="1.2.3.4", subdomain="minecraft-default", server_id="srv-default"
+    )
+
 
 @patch("personal_server_hub.services.dns.update_godaddy_dns")
 @patch("personal_server_hub.services.hetzner.create_volume")
@@ -67,6 +116,12 @@ def test_handle_server_create(mock_sb, mock_vol, mock_dns):
 
     assert status == 201
     assert body["server_slug"] == "skyblock"
+    mock_vol.assert_called_once_with(
+        name="vol-minecraft-skyblock",
+        size_gb=20,
+        location="nbg1",
+    )
+    assert mock_sb.call_args_list[1].kwargs["data"]["hetzner_location"] == "nbg1"
 
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_server_create_invalid_name(mock_sb):
@@ -101,3 +156,36 @@ def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mo
     assert status == 200
     assert body["mode"] == "graceful"
     mock_dns.assert_called_with("0.0.0.0", subdomain="sky", server_id="srv-sky")
+
+
+@patch("personal_server_hub.services.dns.find_subdomains_by_ip", return_value=[])
+@patch("personal_server_hub.services.dns.update_godaddy_dns")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.agent.stop_remote_server", return_value={"status": "stopping"})
+@patch("personal_server_hub.services.hetzner.list_servers")
+def test_handle_stop_uses_game_default_when_no_dns_record(
+    mock_list, mock_agent, mock_sb, mock_dns, mock_find_subs
+):
+    mock_list.return_value = [{
+        "server_id": 999,
+        "name": "server-minecraft-default",
+        "ip": "2.28.203.66",
+    }]
+    mock_sb.side_effect = [
+        (200, json.dumps([{
+            "server_id": "srv-default",
+            "server_slug": "minecraft-default",
+            "game": "minecraft",
+        }])),
+        (200, '{"status": "ok"}'),
+        (200, "[]"),
+        (200, "[]"),
+    ]
+
+    status, body = rest_api.handle_stop({"name": "default"})
+
+    assert status == 200
+    assert body["mode"] == "graceful"
+    mock_dns.assert_called_with(
+        "0.0.0.0", subdomain="minecraft-default", server_id="srv-default"
+    )

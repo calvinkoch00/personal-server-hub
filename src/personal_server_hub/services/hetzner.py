@@ -3,7 +3,7 @@ import json
 import urllib.request
 import urllib.error
 from personal_server_hub.config import HETZNER_API_TOKEN, get_stage1_bootloader, get_game_config
-from personal_server_hub.services.dns import update_godaddy_dns
+from personal_server_hub.services.dns import fallback_server_subdomain, update_godaddy_dns
 from personal_server_hub.services.supabase import log_server_start_to_supabase, supabase_client_request
 
 BASE_URL = "https://api.hetzner.cloud/v1"
@@ -62,10 +62,7 @@ def create_server(
     resolved_type = server_type or (db_server.get("hetzner_server_type") if db_server else None) or game_cfg.get("default_type", "cpx32")
     db_server_id = db_server.get("server_id") if db_server else None
 
-    # Subdomain ermitteln:
-    # 1. Prio: Verknüpfter Record aus dim_dns_records für diesen Server
-    # 2. Prio: Wenn es der Default-Server ist -> GODADDY_SUBDOMAIN ("mc")
-    # 3. Prio: Fallback -> clean_slug
+    # Prefer the server's linked DNS record; fall back to a deterministic hostname.
     subdomain = None
     if db_server_id:
         status_dns, resp_dns = supabase_client_request(
@@ -75,10 +72,9 @@ def create_server(
             subdomain = json.loads(resp_dns)[0].get("subdomain")
 
     if not subdomain:
-        if clean_slug in ["minecraft-default", "default"]:
-            subdomain = os.environ.get("GODADDY_SUBDOMAIN", "mc")
-        else:
-            subdomain = clean_slug
+        subdomain = fallback_server_subdomain(clean_game, clean_slug)
+
+    location = (db_server.get("hetzner_location") if db_server else None) or "nbg1"
 
     user_data = get_stage1_bootloader(
         volume_id=volume_id,
@@ -92,7 +88,7 @@ def create_server(
         "name": vm_name,
         "server_type": resolved_type,
         "image": "ubuntu-24.04",
-        "location": os.environ.get("HETZNER_LOCATION", "nbg1"),
+        "location": location,
         "user_data": user_data,
         "volumes": [volume_id],
         "labels": {"game": clean_game, "server_slug": clean_slug}

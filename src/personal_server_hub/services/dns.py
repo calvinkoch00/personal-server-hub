@@ -7,7 +7,14 @@ from personal_server_hub.services.supabase import supabase_client_request
 GODADDY_API_KEY = os.environ.get("GODADDY_API_KEY")
 GODADDY_API_SECRET = os.environ.get("GODADDY_API_SECRET")
 GODADDY_DOMAIN = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
-GODADDY_SUBDOMAIN = os.environ.get("GODADDY_SUBDOMAIN", "mc")
+
+def fallback_server_subdomain(game: str, server_slug: str) -> str:
+    normalized_game = game.strip().lower()
+    normalized_slug = server_slug.strip().lower()
+    if normalized_slug in {"default", f"{normalized_game}-default"}:
+        return f"{normalized_game}-default"
+    return normalized_slug
+
 
 def _get_headers() -> dict:
     return {
@@ -15,13 +22,13 @@ def _get_headers() -> dict:
         "Content-Type": "application/json"
     }
 
-def update_godaddy_dns(ip: str, subdomain: str | None = None, server_id: str | None = None) -> bool:
+def update_godaddy_dns(ip: str, subdomain: str, server_id: str | None = None) -> bool:
     """Aktualisiert exakt eine Subdomain bei GoDaddy und katalogisiert sie in Supabase."""
     if not GODADDY_API_KEY or not GODADDY_API_SECRET:
         print("[DNS ERROR] GoDaddy API Keys fehlen in Umgebungsvariablen.")
         return False
 
-    target_sub = (subdomain or os.environ.get("GODADDY_SUBDOMAIN", "mc")).strip().lower()
+    target_sub = subdomain.strip().lower()
     domain = GODADDY_DOMAIN
 
     url = f"https://api.godaddy.com/v1/domains/{domain}/records/A/{target_sub}"

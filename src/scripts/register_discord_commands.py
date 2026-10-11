@@ -5,8 +5,8 @@ import urllib.error
 
 BASE_DIR = os.path.dirname(__file__)
 JSON_PATH = os.path.join(BASE_DIR, "discord_commands.json")
-CACHE_PATH = os.path.join(BASE_DIR, "..", "aws_lambda", "commands_cache.txt")
-ENV_PATH = os.path.join(BASE_DIR, "..", ".env")
+CACHE_PATH = os.path.join(BASE_DIR, "..", "personal_server_hub", "commands_cache.txt")
+ENV_PATH = os.path.join(BASE_DIR, "..", "..", ".env")
 
 # 1. Credentials laden
 APP_ID = os.environ.get("DISCORD_APPLICATION_ID")

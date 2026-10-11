@@ -1,6 +1,11 @@
 import os
 import json
 import boto3
+from personal_server_hub.runtime_secrets import load_runtime_secrets
+
+# Application modules read some settings at import time.
+load_runtime_secrets()
+
 from personal_server_hub.services.auth import is_authorized, verify_discord_signature
 import personal_server_hub.discord_api as discord_api
 import personal_server_hub.rest_api as rest_api

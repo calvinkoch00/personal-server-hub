@@ -108,13 +108,13 @@ Die registrierten Befehle werden in [`scripts/discord_commands.json`](./scripts/
 * `/server start name: skyblock duration: 45m log: game` startet den Server `skyblock` mit Game-Logs.
 * `/server start duration: 12h log: all` startet den Default-Server mit Game- und System-Logs.
 
-Aktuell enthält `aws_lambda/config.py` nur eine Spielkonfiguration für Minecraft. Obwohl einige Befehle ein `game`-Feld anbieten, ist daraus keine Unterstützung weiterer Gameserver-Images abzuleiten; das Bootstrap-Skript erstellt derzeit nur ein Minecraft-Compose-Setup.
+Aktuell enthält `src/personal_server_hub/config.py` nur eine Spielkonfiguration für Minecraft. Obwohl einige Befehle ein `game`-Feld anbieten, ist daraus keine Unterstützung weiterer Gameserver-Images abzuleiten; das Bootstrap-Skript erstellt derzeit nur ein Minecraft-Compose-Setup.
 
 ---
 
 ## REST Control Plane API
 
-Die konfigurierte öffentliche API-Basis ist `https://api.calvinkoch.ch`. Der Pfad wird in `aws_lambda/rest_api.py` geroutet. Die Lambda-Funktion prüft bei regulären REST-Anfragen den Token, verarbeitet `OPTIONS` für CORS und erwartet JSON für Requests mit Body.
+Die konfigurierte öffentliche API-Basis ist `https://api.calvinkoch.ch`. Der Pfad wird in `src/personal_server_hub/rest_api.py` geroutet. Die Lambda-Funktion prüft bei regulären REST-Anfragen den Token, verarbeitet `OPTIONS` für CORS und erwartet JSON für Requests mit Body.
 
 ### Authentifizierung
 
@@ -273,7 +273,7 @@ source .venv/bin/activate
 pytest
 ```
 
-`setup_env.sh` erstellt `.venv`, installiert `requirements.txt` und richtet VS Code/Pylance ein. Es erzeugt keine `.env` und provisioniert keine Cloud-Ressourcen. Lege lokale Secrets bei Bedarf selbst in `.env` ab; `.env` ist in `.gitignore` enthalten. `scripts/register_discord_commands.py` benötigt `DISCORD_APPLICATION_ID` und `DISCORD_BOT_TOKEN` (aus der Umgebung oder `.env`).
+`setup_env.sh` erstellt `.venv`, installiert `requirements.txt` und richtet VS Code/Pylance ein. Es erzeugt keine `.env` und provisioniert keine Cloud-Ressourcen. Lege lokale Secrets bei Bedarf selbst in `.env` ab; `.env` ist in `.gitignore` enthalten. `src/scripts/register_discord_commands.py` benötigt `DISCORD_APPLICATION_ID` und `DISCORD_BOT_TOKEN` (aus der Umgebung oder `.env`).
 
 Die bereitgestellte [`.env.example`](./.env.example) enthält Beispielwerte für Hetzner, Authentifizierung und eine Lambda Function URL. Für die Discord-Command-Registrierung müssen zusätzlich folgende Werte lokal gesetzt sein:
 
@@ -282,55 +282,72 @@ DISCORD_APPLICATION_ID=deine_discord_application_id
 DISCORD_BOT_TOKEN=dein_discord_bot_token
 ```
 
-### 2. GitHub Actions Deployment
+### 2. Bitwarden als Quelle der Wahrheit
 
-`.github/workflows/deploy.yml` baut und deployed bei Pushes auf `main` oder manuellem `workflow_dispatch`. Wenn die Discord-Registrierungsdatei oder das Registrierungsskript geändert wurde (oder der Workflow manuell gestartet wird), werden Slash Commands registriert, bevor Lambda-Paket und Code aktualisiert werden.
+Die GitHub Actions Workflow-Datei [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) liest die benötigten Einträge über die offizielle Bitwarden Secrets Manager Action. Bitwarden bleibt der Ort, an dem Anwendungswerte gepflegt werden. Die Workflow-Datei referenziert die Bitwarden Secret IDs; sie enthält keine Werte.
 
-Benötigte GitHub Actions Secrets:
+Ein Bitwarden-Machine-Account-Token kann nicht zuerst aus Bitwarden abgerufen werden, weil genau dieses Token den Zugriff auf Bitwarden ermöglicht. Lege deshalb einmalig in GitHub unter **Settings → Secrets and variables → Actions → Secrets** das Secret `BW_ACCESS_TOKEN` an. Kopiere den Access Token direkt aus Bitwarden nach GitHub; nicht in den Quellcode, ein Workflow-Log oder einen Chat. Der Machine Account benötigt nur Lesezugriff auf das Projekt mit den in der Workflow-Datei aufgelisteten Einträgen.
 
-* `AWS_ACCESS_KEY_ID`
-* `AWS_SECRET_ACCESS_KEY`
+Der Workflow synchronisiert diese Lambda-Werte als ein JSON-Secret nach AWS Secrets Manager:
+
+* `AUTH_SECRET`
 * `DISCORD_APPLICATION_ID`
-* `DISCORD_BOT_TOKEN`
+* `DISCORD_LOG_WEBHOOK_URL`
+* `DISCORD_PUBLIC_KEY`
+* `DISCORD_STATUS_WEBHOOK_URL`
+* `GITHUB_REPO_RAW`
+* `GODADDY_API_KEY`, `GODADDY_API_SECRET`, `GODADDY_DOMAIN`
+* `HETZNER_API_TOKEN`
+* `SUPABASE_KEY`, `SUPABASE_URL`
 
-Die AWS-Zugangsdaten müssen das Deployment der Funktion `hetzner-server-controller` in `eu-central-1` erlauben. Der Workflow verwendet keinen `LAMBDA_FUNCTION_URL`-Secret.
+`DISCORD_BOT_TOKEN` wird nur beim Registrieren der Discord-Slash-Commands im Workflow verwendet und **nicht** in das Lambda-Runtime-Secret kopiert. `AWS_REGION` wird im Workflow aus Bitwarden für AWS-Aufrufe genutzt; in Lambda stellt AWS die Region als reservierte Laufzeitvariable bereit. `GODADDY_SUBDOMAIN` und `HETZNER_LOCATION` sind keine Lambda-Umgebungswerte mehr: Subdomains werden für Server anhand der Verknüpfung über `server_id` aus `dim_dns_records` gelesen. Fehlt ein verknüpfter DNS-Eintrag, ist der Fallback `<game>-default` für den Default-Server und der Server-Slug für Nicht-Default-Server. Der Serverstandort wird aus `dim_servers.hetzner_location` gelesen. Neu angelegte Server erhalten zunächst `nbg1`, gespeichert in `dim_servers`.
 
-### 3. AWS Lambda Konfiguration
+Die Bitwarden-Einträge `BWS_ACCESS_TOKEN`, `BWS_PROJECT_ID`, `GITHUB_TOKEN`, `LAMBDA_FUNCTION_URL` und `SUPABASE_PUBLIC_KEY` werden vom aktuellen Backend/Workflow nicht als Runtime-Konfiguration verwendet. Der Bitwarden Machine-Account-Token muss separat als GitHub Actions Secret `BW_ACCESS_TOKEN` vorliegen. Nicht verwendete Werte werden bewusst nicht in AWS kopiert.
 
-Das Deployment kopiert `aws_lambda/` an die Paketwurzel; der konfigurierte Lambda-Handler muss daher `lambda_function.lambda_handler` lauten. Konfiguriere folgende Variablen unter **Configuration → Environment variables**:
+### 3. GitHub Actions Zugriff auf AWS mit OIDC
 
-| Variable | Zweck / Standard |
-| --- | --- |
-| `AUTH_SECRET` | Authentifizierung regulärer REST-Anfragen und der VM-Agent-Aufrufe. |
-| `DISCORD_PUBLIC_KEY` | Erforderlicher öffentlicher Discord-Schlüssel für die Signaturprüfung. |
-| `DISCORD_APPLICATION_ID` | Fallback Application ID für Interaktionen, wenn sie im Interaction-Payload fehlt. |
-| `HETZNER_API_TOKEN` | Hetzner Cloud API. |
-| `HETZNER_LOCATION` | Hetzner-Standort; Standard `nbg1`. |
-| `AWS_REGION` | Region des Lambda-Clients; Standard `eu-central-1`. |
-| `GODADDY_API_KEY`, `GODADDY_API_SECRET` | GoDaddy DNS API; erforderlich für DNS-Änderungen. |
-| `GODADDY_DOMAIN` | DNS-Domain; Standard `calvinkoch.ch`. |
-| `GODADDY_SUBDOMAIN` | Fallback-Subdomain für den Minecraft-Default-Server; Standard `mc`. |
-| `SUPABASE_URL`, `SUPABASE_KEY` | Supabase REST API. |
-| `DISCORD_STATUS_WEBHOOK_URL` | Statusmeldungen von den Gameserver-VMs. |
-| `DISCORD_LOG_WEBHOOK_URL` | Logmeldungen der VMs; fällt auf `DISCORD_STATUS_WEBHOOK_URL` zurück. |
-| `GITHUB_REPO_RAW` | Optionaler Raw-Content-Basis-URL für Stage 2; Standard verweist auf das `main`-Branch dieses Repositories. |
+GitHub erhält keine langfristigen AWS-Zugangsschlüssel. Der einmalige AWS-Rollout ist in [`infra/github-actions-oidc.yml`](./infra/github-actions-oidc.yml) beschrieben und richtet ein:
 
-`AWS_LAMBDA_FUNCTION_NAME` wird von AWS bereitgestellt und muss dem Namen der deployten Funktion entsprechen; der Discord-Einstieg verwendet ihn für die asynchrone Selbstinvokation. Die Execution Role benötigt `lambda:InvokeFunction` auf diese Funktion. Setze das Function-Timeout auf mindestens 30 Sekunden für Worker-Aufrufe zu Hetzner, Supabase und VM-Agent. Der synchrone Discord-Einstieg antwortet vorher mit Deferred ACK.
+* eine eingeschränkte GitHub-OIDC-Rolle, die nur `calvinkoch00/personal-server-hub` auf `main` vertraut;
+* das Secret `personal-server-hub/lambda-runtime` in Secrets Manager;
+* `PutSecretValue` auf dieses Secret für die GitHub-Rolle;
+* `GetSecretValue` auf dasselbe Secret für die bestehende Lambda Execution Role `hetzner-server-controller-role-iiub65qe`.
 
-Die aktuelle Konfiguration in `aws_lambda/config.py` enthält Minecraft mit Default-Volume `107045799`, Port `25565` und Typ `cpx32`; weitere Server werden anhand ihres Volume-/Typ-Eintrags in Supabase gestartet. `VOLUME_ID` aus der lokalen Beispielkonfiguration ist kein Lambda-Override für den Code, der den Default-Server auswählt.
+Prüfe in **IAM → Identity providers**, ob `https://token.actions.githubusercontent.com` bereits existiert. Wenn ja, setze den Template-Parameter `CreateGitHubOidcProvider` auf `false`; wenn nicht, bleibt er `true` und CloudFormation legt den Provider an. Erstelle den Stack in derselben AWS-Region, die in Bitwarden als `AWS_REGION` gepflegt wird. Prüfe vor dem Erstellen, dass die Lambda Execution Role im Template-Parameter exakt mit der Rolle unter **Lambda → Configuration → Permissions** übereinstimmt.
 
-### 4. Discord Interactions und Command-Registrierung
+Nach erfolgreichem Stack-Deployment hinterlege unter GitHub **Settings → Secrets and variables → Actions → Variables** die CloudFormation Outputs:
+
+* `AWS_DEPLOY_ROLE_ARN` = `GitHubActionsDeployRoleArn`
+* `LAMBDA_RUNTIME_SECRET_ARN` = `LambdaRuntimeSecretArn`
+
+Der Workflow benötigt außerdem das oben beschriebene GitHub Actions Secret `BW_ACCESS_TOKEN`. Danach synchronisiert er Bitwarden bei Pushes auf `main`, manuellem `workflow_dispatch` und täglich. Der tägliche Lauf übernimmt Änderungen an Bitwarden automatisch und aktualisiert die Lambda-Konfiguration, sodass neue Ausführungsumgebungen den aktuellen Secret-Stand laden.
+
+Die IAM User `github-lambda-deployer` in den Screenshots ist kein OIDC-Role. Lass ihn bestehen, bis ein Push oder manueller Workflow-Lauf mit OIDC erfolgreich war. Danach können seine alten Access Keys widerrufen und der Benutzer entfernt werden, falls er sonst nicht verwendet wird.
+
+### 4. Lambda Runtime-Konfiguration
+
+Das Deployment packt `src/personal_server_hub/` zusammen mit den Abhängigkeiten. Der konfigurierte Handler lautet `personal_server_hub.lambda_function.lambda_handler`; ein Kompatibilitäts-Handler `lambda_function.lambda_handler` ist im Paket enthalten, damit der Code- und Handlerwechsel beim ersten Rollout ohne Unterbrechung möglich ist.
+
+Der Workflow verwaltet die Lambda-Umgebungsvariablen `APP_SECRETS_ARN` und `SECRET_VERSION_ID`. Die Anwendung lädt beim Cold Start das JSON-Secret über die Lambda Execution Role und setzt die enthaltenen Anwendungswerte in der Prozessumgebung, bevor Anwendungsmodule importiert werden. Die Werte werden nicht geloggt. Entferne nach erfolgreichem Rollout alte, direkt in Lambda gespeicherte Anwendungs-Secretwerte; der Workflow ersetzt die Funktion-Umgebung auf `APP_SECRETS_ARN` und `SECRET_VERSION_ID`. AWS-eigene reservierte Variablen wie `AWS_REGION` und `AWS_LAMBDA_FUNCTION_NAME` bleiben AWS-managed.
+
+Secrets Manager ist ein zusätzlicher AWS-Dienst mit laufenden Kosten pro Secret und API-Aufrufen; siehe [AWS Secrets Manager Pricing](https://aws.amazon.com/secrets-manager/pricing). Das Laufzeit-Secret enthält keine Discord-Bot-Credentials. Die Secrets werden im GitHub-Runner während des Syncs verarbeitet, aber nie absichtlich ausgegeben; Runner und Workflow-Code sind daher Teil der Sicherheitsgrenze.
+
+`AWS_LAMBDA_FUNCTION_NAME` wird von AWS bereitgestellt; der Discord-Einstieg verwendet ihn für die asynchrone Selbstinvokation. Die Lambda Execution Role benötigt weiterhin `lambda:InvokeFunction` auf diese Funktion. Setze das Function-Timeout auf mindestens 30 Sekunden für Worker-Aufrufe zu Hetzner, Supabase und VM-Agent. Der synchrone Discord-Einstieg antwortet vorher mit Deferred ACK.
+
+Die Minecraft-Code-Defaults sind Volume `107045799`, Port `25565` und Servertyp `cpx32`; Servermetadaten einschließlich `hetzner_location`, Volume und Servertyp werden für angelegte Server aus Supabase gelesen. `VOLUME_ID` aus der lokalen Beispielkonfiguration ist kein Lambda-Override.
+
+### 5. Discord Interactions und Command-Registrierung
 
 1. Im [Discord Developer Portal](https://discord.com/developers/applications) die Interactions Endpoint URL auf den öffentlichen HTTPS-Endpunkt der Lambda-API setzen (im beschriebenen Deployment `https://api.calvinkoch.ch`).
-2. Den passenden Discord Public Key als `DISCORD_PUBLIC_KEY` in Lambda konfigurieren.
+2. Den passenden Discord Public Key als `DISCORD_PUBLIC_KEY` in Bitwarden pflegen; der Deployment-Workflow synchronisiert ihn zu Lambda.
 3. Global Slash Commands mit `DISCORD_APPLICATION_ID` und `DISCORD_BOT_TOKEN` registrieren:
 
 ```bash
 source .venv/bin/activate
-python scripts/register_discord_commands.py
+python src/scripts/register_discord_commands.py
 ```
 
-Das Registrierungsskript liest die `PUT /applications/{application_id}/commands`-Antwort und aktualisiert daraus `aws_lambda/commands_cache.txt`. Die Command-Definitionen kommen aus `scripts/discord_commands.json`.
+Das Registrierungsskript liest die `PUT /applications/{application_id}/commands`-Antwort und aktualisiert daraus `src/personal_server_hub/commands_cache.txt`. Die Command-Definitionen kommen aus `src/scripts/discord_commands.json`.
 
 ---
 
@@ -558,7 +575,7 @@ Diese Punkte werden als bestehendes Verhalten behandelt und bei der Migration du
 - Das Löschen eines Servers verlangt im Discord-Flow eine Bestätigung und löscht laut bestehender Dokumentation Volume/DNS bzw. markiert den Datenbankeintrag, beendet aber nicht automatisch eine eventuell laufende VM. Das destruktive Verhalten muss explizit dokumentiert und getestet werden.
 - Server-Stop ohne Auswahl nimmt derzeit den ersten aktiven Server. Bei nicht lesbarem Supabase-Serverkatalog fällt die Serverliste derzeit teilweise auf Hetzner-Instanzen zurück.
 - Die API-Implementierung erzwingt derzeit keine HTTP-Methode auf ihren REST-Pfaden. Die Migration soll die Methoden explizit machen; vorhandene Clients und tatsächlich genutzte Aufrufmethoden sind zuvor zu ermitteln.
-- Der Deployment-Workflow kopiert derzeit `aws_lambda/` an die Paketwurzel und setzt dadurch den Handler als `lambda_function.lambda_handler`. Er registriert globale Discord-Kommandos über Discords `PUT`-Route; die bestehende Definition liegt in `scripts/discord_commands.json`.
+- Der Deployment-Workflow paketiert `src/personal_server_hub/` sowie Abhängigkeiten und verwendet `personal_server_hub.lambda_function.lambda_handler`. Er registriert globale Discord-Kommandos über Discords `PUT`-Route; die Definition liegt in `src/scripts/discord_commands.json`.
 - `hetzner/bootstrap.sh` lädt VM-Dateien einzeln nach festgelegten Pfaden; Systemd startet Skripte anhand konkreter Dateinamen. Umbenennung/Verschiebung ist daher ein Deployment-Änderungspaket, nicht nur ein lokales Refactoring.
 - `scripts/run_user_tests.py` ist als Live-Cloud-/Ressourcen-Test zu behandeln und nicht unaufgefordert im normalen Testlauf auszuführen.
 

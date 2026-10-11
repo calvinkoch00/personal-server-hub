@@ -1,4 +1,3 @@
-import os
 import re
 import json
 from datetime import datetime, timezone
@@ -163,11 +162,12 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
 
     # Fallback für DNS, falls nichts in der Datenbank gefunden wurde
     if not subdomains_to_reset:
-        slug = db_servers[0].get("server_slug", "") if db_servers else ""
-        if slug in ["minecraft-default", "default"]:
-            subdomains_to_reset.add(os.environ.get("GODADDY_SUBDOMAIN", "mc"))
-        elif slug:
-            subdomains_to_reset.add(slug)
+        server_row = db_servers[0] if db_servers else {}
+        slug = server_row.get("server_slug", "")
+        if slug:
+            subdomains_to_reset.add(
+                dns.fallback_server_subdomain(server_row.get("game", "minecraft"), slug)
+            )
 
     # Alle ermittelten Subdomains zuverlässig auf 0.0.0.0 setzen
     for sub in subdomains_to_reset:
@@ -212,7 +212,8 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
         return 400, {"error": f"Ein aktiver Server mit dem Namen '{raw_slug}' existiert bereits."}
 
     volume_name = f"vol-{game}-{raw_slug}"[:32]
-    vol = hetzner.create_volume(name=volume_name, size_gb=20, location="nbg1")
+    location = "nbg1"
+    vol = hetzner.create_volume(name=volume_name, size_gb=20, location=location)
     volume_id = vol.get("id")
     if not volume_id:
         return 500, {"error": "Hetzner Volume konnte nicht angelegt werden"}
@@ -223,6 +224,7 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
         "display_name": f"{game}-{raw_slug}",
         "hetzner_volume_id": volume_id,
         "hetzner_server_type": server_type,
+        "hetzner_location": location,
         "status": "offline",
         "created_by": caller_id
     }
