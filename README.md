@@ -114,7 +114,9 @@ Aktuell enthält `src/personal_server_hub/config.py` nur eine Spielkonfiguration
 
 ## REST Control Plane API
 
-Die konfigurierte öffentliche API-Basis ist `https://api.calvinkoch.ch`. Der Pfad wird in `src/personal_server_hub/rest_api.py` geroutet. Die Lambda-Funktion prüft bei regulären REST-Anfragen den Token, verarbeitet `OPTIONS` für CORS und erwartet JSON für Requests mit Body.
+Die konfigurierte öffentliche API-Basis ist `https://api.calvinkoch.ch`. `GET /help` wird von der FastAPI-Anwendung in `src/personal_server_hub/api/` bedient; die übrigen bestehenden Pfade werden vorerst weiterhin in `src/personal_server_hub/rest_api.py` geroutet. Die Lambda-Funktion prüft bei regulären REST-Anfragen den Token, verarbeitet `OPTIONS` für CORS und erwartet JSON für Requests mit Body.
+
+`GET /help` liefert die Hilfebeschreibung als JSON unter dem Feld `help` und verlangt wie die übrigen REST-Endpunkte einen gültigen Authentifizierungstoken.
 
 ### Authentifizierung
 

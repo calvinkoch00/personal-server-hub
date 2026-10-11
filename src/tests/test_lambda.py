@@ -77,6 +77,46 @@ def test_list_servers_endpoint(mock_sb, auth_headers):
     assert body["servers"][0]["server_name"] == "default"
 
 
+def test_help_endpoint_is_served_by_fastapi(auth_headers):
+    event = {
+        "version": "2.0",
+        "rawPath": "/help",
+        "rawQueryString": "",
+        "headers": auth_headers,
+        "requestContext": {
+            "http": {
+                "method": "GET",
+                "path": "/help",
+                "protocol": "HTTP/1.1",
+                "sourceIp": "127.0.0.1",
+                "userAgent": "pytest",
+            }
+        },
+        "isBase64Encoded": False,
+    }
+
+    response = lambda_handler(event, None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert "help" in body
+    assert "/server start" in body["help"]
+
+
+def test_help_endpoint_still_requires_authentication():
+    response = lambda_handler(
+        {
+            "version": "2.0",
+            "rawPath": "/help",
+            "headers": {},
+            "requestContext": {"http": {"method": "GET"}},
+        },
+        None,
+    )
+
+    assert response["statusCode"] == 401
+
+
 # 4. Stop Server Test
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 @patch("personal_server_hub.services.hetzner.delete_server")

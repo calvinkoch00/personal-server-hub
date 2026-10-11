@@ -1,17 +1,20 @@
 import os
 import json
 import boto3
+from mangum import Mangum
 from personal_server_hub.runtime_secrets import load_runtime_secrets
 
 # Application modules read some settings at import time.
 load_runtime_secrets()
 
 from personal_server_hub.services.auth import is_authorized, verify_discord_signature
+from personal_server_hub.api.main import app
 import personal_server_hub.discord_api as discord_api
 import personal_server_hub.rest_api as rest_api
 
 AWS_REGION = os.environ.get("AWS_REGION", "eu-central-1")
 lambda_client = boto3.client("lambda", region_name=AWS_REGION)
+asgi_handler = Mangum(app)
 
 def json_response(status_code: int, body: dict) -> dict:
     return {
@@ -104,6 +107,9 @@ def lambda_handler(event, context):
         return json_response(401, {"error": "Unauthorized"})
 
     raw_path = event.get("rawPath") or event.get("path") or "/"
+    if raw_path.rstrip("/") == "/help" and http_method == "GET":
+        return asgi_handler(event, context)
+
     body = {}
     if raw_body:
         try:
