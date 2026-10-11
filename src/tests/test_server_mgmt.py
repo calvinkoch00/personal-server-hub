@@ -1,11 +1,11 @@
 import json
 from unittest.mock import patch, MagicMock
-from src.personal_server_hub.services import hetzner
-import src.personal_server_hub.rest_api as rest_api
+from personal_server_hub.services import hetzner
+import personal_server_hub.rest_api as rest_api
 
-@patch("services.hetzner.supabase_client_request")
+@patch("personal_server_hub.services.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")
-@patch("services.hetzner.update_godaddy_dns")
+@patch("personal_server_hub.services.hetzner.update_godaddy_dns")
 def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
     server_meta = [{
         "server_id": "srv-1234",
@@ -34,7 +34,7 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
     hetzner_resp.__enter__.return_value = hetzner_resp
     mock_urlopen.return_value = hetzner_resp
 
-    with patch("services.hetzner.log_server_start_to_supabase") as mock_log:
+    with patch("personal_server_hub.services.hetzner.log_server_start_to_supabase") as mock_log:
         res = hetzner.create_server(game="minecraft", server_name="default", seconds=300)
 
         assert res["server_id"] == 101
@@ -44,9 +44,9 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb):
         assert mock_dns.called
         assert mock_log.called
 
-@patch("services.dns.update_godaddy_dns")
-@patch("services.hetzner.create_volume")
-@patch("services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.dns.update_godaddy_dns")
+@patch("personal_server_hub.services.hetzner.create_volume")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_server_create(mock_sb, mock_vol, mock_dns):
     mock_vol.return_value = {"id": 12345678}
     mock_sb.side_effect = [
@@ -68,7 +68,7 @@ def test_handle_server_create(mock_sb, mock_vol, mock_dns):
     assert status == 201
     assert body["server_slug"] == "skyblock"
 
-@patch("services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_server_create_invalid_name(mock_sb):
     status, body = rest_api.handle_server_create({
         "game": "minecraft",
@@ -78,11 +78,11 @@ def test_handle_server_create_invalid_name(mock_sb):
     assert status == 400
     assert "nur Kleinbuchstaben" in body["error"]
 
-@patch("services.dns.find_subdomains_by_ip")
-@patch("services.dns.update_godaddy_dns")
-@patch("services.supabase.supabase_client_request")
-@patch("services.agent.stop_remote_server")
-@patch("services.hetzner.list_servers")
+@patch("personal_server_hub.services.dns.find_subdomains_by_ip")
+@patch("personal_server_hub.services.dns.update_godaddy_dns")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.agent.stop_remote_server")
+@patch("personal_server_hub.services.hetzner.list_servers")
 def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mock_find_subs):
     mock_find_subs.return_value = []
     mock_list.return_value = [{

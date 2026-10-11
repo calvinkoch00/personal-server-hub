@@ -1,7 +1,7 @@
 import json
-import src.personal_server_hub.rest_api as rest_api
-from src.personal_server_hub.commands.finance import resolve_discord_user_id
-from src.personal_server_hub.services.supabase import supabase_client_request
+import personal_server_hub.rest_api as rest_api
+from personal_server_hub.commands.finance import resolve_discord_user_id
+from personal_server_hub.services.supabase import supabase_client_request
 
 def handle_account(data: dict, caller_id: str) -> str:
     options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}

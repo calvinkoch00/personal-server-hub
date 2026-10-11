@@ -1,10 +1,10 @@
 import json
 from unittest.mock import patch
-import src.personal_server_hub.rest_api as rest_api
+import personal_server_hub.rest_api as rest_api
 
 
-@patch("services.hetzner.list_servers")
-@patch("services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.hetzner.list_servers")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_whitelist_add_with_hetzner_live_sync(mock_sb, mock_hetzner_list):
     # Hetzner bestätigt: VM läuft tatsächlich
     mock_hetzner_list.return_value = [
@@ -36,7 +36,7 @@ def test_handle_whitelist_add_with_hetzner_live_sync(mock_sb, mock_hetzner_list)
         (200, '{"status": "updated"}')
     ]
 
-    with patch("services.agent.add_remote_whitelist") as mock_agent_add:
+    with patch("personal_server_hub.services.agent.add_remote_whitelist") as mock_agent_add:
         mock_agent_add.return_value = {"status": "ok"}
 
         status, body = rest_api.handle_whitelist_add({
@@ -53,8 +53,8 @@ def test_handle_whitelist_add_with_hetzner_live_sync(mock_sb, mock_hetzner_list)
         assert mock_agent_add.called
 
 
-@patch("services.hetzner.list_servers")
-@patch("services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.hetzner.list_servers")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_whitelist_add_forbidden_other_user(mock_sb, mock_hetzner_list):
     mock_hetzner_list.return_value = []
     mock_sb.side_effect = [

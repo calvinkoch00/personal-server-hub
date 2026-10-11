@@ -1,9 +1,9 @@
 import os
 import json
 import boto3
-from src.personal_server_hub.services.auth import is_authorized, verify_discord_signature
-import src.personal_server_hub.discord_api as discord_api
-import src.personal_server_hub.rest_api as rest_api
+from personal_server_hub.services.auth import is_authorized, verify_discord_signature
+import personal_server_hub.discord_api as discord_api
+import personal_server_hub.rest_api as rest_api
 
 AWS_REGION = os.environ.get("AWS_REGION", "eu-central-1")
 lambda_client = boto3.client("lambda", region_name=AWS_REGION)

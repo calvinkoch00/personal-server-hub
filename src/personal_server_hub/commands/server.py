@@ -1,5 +1,5 @@
 import os
-import src.personal_server_hub.rest_api as rest_api
+import personal_server_hub.rest_api as rest_api
 
 def get_help_message() -> str:
     return (

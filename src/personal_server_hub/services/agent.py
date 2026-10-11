@@ -1,6 +1,6 @@
 import json
 import urllib.request
-from src.personal_server_hub.config import AUTH_SECRET
+from personal_server_hub.config import AUTH_SECRET
 
 AGENT_PORT = 8080
 

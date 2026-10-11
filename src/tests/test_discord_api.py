@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock
 from unittest.mock import patch
-import src.personal_server_hub.discord_api as discord_api
+import personal_server_hub.discord_api as discord_api
 
 
 def test_handle_interaction_ping():
@@ -16,7 +16,7 @@ def test_handle_interaction_unsupported():
     assert "Unsupported" in res["body"]["error"]
 
 
-@patch("commands.server.handle_start")
+@patch("personal_server_hub.commands.server.handle_start")
 def test_handle_interaction_server_subcommand_start(mock_start):
     mock_start.return_value = "Server wird gestartet..."
 
@@ -48,7 +48,7 @@ def test_handle_interaction_server_subcommand_start(mock_start):
     assert any(o["name"] == "name" and o["value"] == "skyblock" for o in call_options)
 
 
-@patch("commands.accounts.handle_whitelist")
+@patch("personal_server_hub.commands.accounts.handle_whitelist")
 def test_handle_interaction_whitelist_subcommand(mock_wl):
     mock_wl.return_value = "Whitelist aktualisiert"
 
@@ -82,8 +82,8 @@ def test_handle_interaction_whitelist_subcommand(mock_wl):
     )
 
 
-@patch("discord_api.urllib.request.urlopen")
-@patch("discord_api.handle_interaction")
+@patch("personal_server_hub.discord_api.urllib.request.urlopen")
+@patch("personal_server_hub.discord_api.handle_interaction")
 def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
     mock_interaction.return_value = {
         "statusCode": 200,
@@ -119,7 +119,7 @@ def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
     assert json.loads(final_request.data) == {"content": "Server gestartet"}
 
 
-@patch("discord_api.urllib.request.urlopen")
+@patch("personal_server_hub.discord_api.urllib.request.urlopen")
 def test_execute_help_splits_content_within_discord_limit(mock_urlopen):
     response = MagicMock()
     response.__enter__.return_value = response
@@ -151,8 +151,8 @@ def test_execute_help_splits_content_within_discord_limit(mock_urlopen):
     assert "".join(result_chunks) == expected_content
 
 
-@patch("discord_api.urllib.request.urlopen")
-@patch("discord_api.handle_interaction")
+@patch("personal_server_hub.discord_api.urllib.request.urlopen")
+@patch("personal_server_hub.discord_api.handle_interaction")
 def test_execute_async_component_updates_original_message(mock_interaction, mock_urlopen):
     mock_interaction.return_value = {
         "statusCode": 200,

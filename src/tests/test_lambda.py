@@ -1,8 +1,8 @@
 import json
 from unittest.mock import patch
 
-import src.personal_server_hub.config as config
-from src.personal_server_hub.lambda_function import lambda_handler
+import personal_server_hub.config as config
+from personal_server_hub.lambda_function import lambda_handler
 
 
 # 1. Security Gatekeeper Test
@@ -19,7 +19,7 @@ def test_unauthorized_request():
 
 
 # 2. Server Start Test
-@patch("services.hetzner.create_server")
+@patch("personal_server_hub.services.hetzner.create_server")
 def test_start_endpoint_success(mock_create, auth_headers):
     mock_create.return_value = {
         "server_id": 123456,
@@ -48,7 +48,7 @@ def test_start_endpoint_success(mock_create, auth_headers):
 
 
 # 3. Server List Test
-@patch("services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_list_servers_endpoint(mock_sb, auth_headers):
     mock_sb.return_value = (
         200,
@@ -78,9 +78,9 @@ def test_list_servers_endpoint(mock_sb, auth_headers):
 
 
 # 4. Stop Server Test
-@patch("services.supabase.supabase_client_request")
-@patch("services.hetzner.delete_server")
-@patch("services.hetzner.list_servers")
+@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.services.hetzner.delete_server")
+@patch("personal_server_hub.services.hetzner.list_servers")
 def test_stop_server_endpoint(mock_list, mock_delete, mock_sb, auth_headers):
     mock_list.return_value = [
         {
@@ -125,8 +125,8 @@ def test_stage1_bootloader_generation():
     assert "exec /opt/bootstrap/bootstrap.sh" in script
 
 
-@patch("lambda_function.verify_discord_signature", return_value=True)
-@patch("lambda_function.lambda_client.invoke")
+@patch("personal_server_hub.lambda_function.verify_discord_signature", return_value=True)
+@patch("personal_server_hub.lambda_function.lambda_client.invoke")
 def test_discord_command_is_deferred_and_queued(mock_invoke, _mock_verify, monkeypatch):
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "hetzner-server-controller")
     mock_invoke.return_value = {"StatusCode": 202}
@@ -151,8 +151,8 @@ def test_discord_command_is_deferred_and_queued(mock_invoke, _mock_verify, monke
     assert invocation["app_id"] == "1234567890"
 
 
-@patch("lambda_function.verify_discord_signature", return_value=True)
-@patch("lambda_function.lambda_client.invoke")
+@patch("personal_server_hub.lambda_function.verify_discord_signature", return_value=True)
+@patch("personal_server_hub.lambda_function.lambda_client.invoke")
 def test_discord_button_is_deferred_as_message_update(mock_invoke, _mock_verify, monkeypatch):
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "hetzner-server-controller")
     mock_invoke.return_value = {"StatusCode": 202}
@@ -172,7 +172,7 @@ def test_discord_button_is_deferred_as_message_update(mock_invoke, _mock_verify,
     assert json.loads(response["body"]) == {"type": 6}
 
 
-@patch("lambda_function.discord_api.execute_async_command")
+@patch("personal_server_hub.lambda_function.discord_api.execute_async_command")
 def test_async_worker_executes_queued_interaction(mock_execute):
     event = {
         "async_worker": True,
