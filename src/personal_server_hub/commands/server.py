@@ -3,7 +3,7 @@ import personal_server_hub.rest_api as rest_api
 
 def get_help_message() -> str:
     return (
-        "📖 **Server Hub – Anleitung & Befehle**\n\n"
+        "📖 **STAGING ONLY - Server Hub – Anleitung & Befehle**\n\n"
         "**1️⃣ Einem bestehenden Server beitreten (Schritt-für-Schritt):**\n"
         "1. Account einmalig registrieren: `/addgameaccount game: minecraft username: <DeinIngameName>`\n"
         "2. Whitelist prüfen/hinzufügen: `/whitelist add username: <DeinIngameName> server: <ServerName>`\n"
