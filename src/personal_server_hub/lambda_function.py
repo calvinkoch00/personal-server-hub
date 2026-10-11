@@ -110,6 +110,7 @@ def lambda_handler(event, context):
     if (
         (raw_path.rstrip("/") == "/help" and http_method == "GET")
         or (raw_path.rstrip("/") == "/game-accounts" and http_method == "POST")
+        or (raw_path.rstrip("/") == "/users/register" and http_method == "POST")
     ):
         return asgi_handler(event, context)
 
