@@ -59,7 +59,6 @@ jobs:
             45ca1176-c0c6-460c-9e58-b4e001009919 > GODADDY_DOMAIN
             f25be3bf-89f2-4f12-8743-b4e000fdb261 > HETZNER_API_TOKEN
             01bd43fa-da9d-4a89-85b0-b4e001004012 > SUPABASE_KEY
-            769fffce-742d-4d54-a31d-b4e00100342e > SUPABASE_URL
             bc3e1048-cdbd-4339-9033-b4e00116e543 > STAGING_AWS_DEPLOY_ROLE_ARN
             4a19b9ab-0890-4a78-8e4c-b4e001170129 > STAGING_LAMBDA_RUNTIME_SECRET_ARN
 
@@ -95,6 +94,7 @@ jobs:
         id: sync-secret
         env:
           LAMBDA_RUNTIME_SECRET_ARN: ${{ steps.staging-settings.outputs.STAGING_LAMBDA_RUNTIME_SECRET_ARN }}
+          SUPABASE_URL: https://robyfwiyevnodmhdlkiq.supabase.co
         run: |
           set +x
           umask 077
