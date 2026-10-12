@@ -81,9 +81,12 @@ else
 fi
 
 for script in lifecycle_guard.py session_tracker.py log_streamer.py control_api.py; do
-    curl -fsSL -H "Cache-Control: no-cache" \
-        "$RAW_BASE_URL/hetzner/$script?ts=$(date +%s)" \
-        -o "$AGENT_DIR/$script"
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "$RAW_BASE_URL/src/vm_agent/$script?ts=$(date +%s)" \
+        -o "$AGENT_DIR/$script"; then
+        echo "[BOOTSTRAP] FEHLER: Download von $RAW_BASE_URL/src/vm_agent/$script fehlgeschlagen!"
+        exit 1
+    fi
 done
 
 pip3 install --break-system-packages requests python-dotenv

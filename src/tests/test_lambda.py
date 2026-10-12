@@ -337,3 +337,13 @@ def test_async_worker_executes_queued_interaction(mock_execute):
         token="interaction-token",
         app_id="1234567890"
     )
+
+def test_bootstrap_downloads_agents_from_vm_agent_dir():
+    from pathlib import Path
+
+    bootstrap = Path(config.__file__).resolve().parents[1] / "vm_agent" / "bootstrap.sh"
+    text = bootstrap.read_text()
+    assert "/src/vm_agent/$script" in text
+    assert "/hetzner/" not in text
+    for name in ("lifecycle_guard", "session_tracker", "log_streamer", "control_api"):
+        assert (bootstrap.parent / f"{name}.py").exists()
