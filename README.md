@@ -61,6 +61,7 @@ Skripte liegen in `/opt/gameserver-agent/`; Dienste: `gameserver-{logs,tracker,c
 - Nutzt ein Client andere Methoden als GET/POST auf `/dns/records` oder `/dns/sync` (jetzt 405)?
 - Produktfrage zur GoDaddy-Sync-Richtung (siehe Offene Entscheidungs- und Prüfstellen, Punkt 7; BUG-002/003).
 - BUG-005 (doppelte/verspätete Starts/Stops) könnte mit asynchronen Lambda-Retries zusammenhängen (unbestätigt). Günstiger Test: `MaximumRetryAttempts=0` am Worker.
+- BUG-006: Discord-Interaktionen bleiben oft beim deferred ACK ("Befehl empfangen – ich versuche ihn auszuführen…") hängen und liefern keine finale Antwort von Lambda (vermutlich Probleme mit asynchroner Lambda-Selbstinvokation via `lambda_client.invoke`, Timeouts oder Worker-Ausführung).
 - Alias `handle_addgameaccount` in `rest_api.py` wird von `route_request` und drei Tests in `test_mojang.py` genutzt.
 
 ---
