@@ -3,6 +3,80 @@
 Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und automatischen Terminierung von Gameservern in der Hetzner Cloud. Gesteuert via Discord Slash-Commands oder REST-API über AWS CloudFront, AWS Lambda, GoDaddy DNS, Supabase-Persistenz und modulare Systemd-Dienste auf persistentem Block-Storage.
 
 ---
+## Start hier (Übergabe an den nächsten Agenten)
+
+Stand: 2026-10-12, Branch `staging`. Dieses Kapitel fasst den aktuellen Zustand zusammen; Details stehen in den Kapiteln darunter und im Änderungsprotokoll. **Bei Widersprüchen gilt der Code.**
+
+### Ziel
+
+Alle REST-Endpunkte aus dem alten `src/personal_server_hub/rest_api.py` wandern in die Schichten **FastAPI-Router (`api/routers/`) → Pydantic-Schema (`api/schemas/`) → Anwendungslogik (`application/`)**. Discord wird ein zweiter Adapter, der dieselbe FastAPI-App **im selben Prozess** aufruft (kein öffentlicher HTTP-Umweg). Pfade und Verhalten bleiben unverändert, abgesehen von den unten akzeptierten Änderungen.
+
+### Migrationsstatus
+
+| Bereich | Status |
+| --- | --- |
+| `GET /help`, `GET /users/{discord_user_id}`, `POST /game-accounts`, `POST /users/register` | Migriert |
+| `GET /dns/records`, `POST /dns/sync` | Migriert (`application/dns.py`; `services/dns.py` ist nur noch Weiterleitung) |
+| Auth-Abhängigkeit (`api/dependencies.py`) | Fertig, global an der App; `require_registered`/`require_admin` noch an keiner Route aktiv |
+| Billing (`exchange-rate`, `costs`, `account`, `cash`) | **Nächster Batch**, Admin-Routen mit `require_admin` |
+| Whitelist | Offen |
+| Server lesen/konfigurieren (`servers`, `log`, `reload-files`) | Offen |
+| Server-Lifecycle (`create`, `delete`, `start`, `stop`) | Offen |
+| Discord-Adapter ruft die App in-process auf (mit `internal_headers`) | Offen; nichts im Discord-Code sendet die internen Header. `lambda_function.py` prüft `AUTH_SECRET` noch vor der Weiterleitung an FastAPI; der In-process-Pfad muss dies nach der Signaturprüfung umgehen |
+| FEAT-008 (Interaction-Dedupe) | Dokumentiert, nicht umgesetzt. Entscheidung: Cooldown wird ignoriert und nicht gespeichert |
+| Aufräumen: Allowlist, `route_request`, `rest_api.py`, Alias `handle_addgameaccount` entfernen | Zuletzt; vorher die drei Tests in `test_mojang.py` umziehen |
+| Später: GoDaddy-HTTP nach `integrations/godaddy.py`, `hetzner.py`/`rest_api.py` auf `application.dns`, `services/dns.py` löschen | Offen |
+
+Reihenfolge: Billing → Whitelist → Server lesen/konfigurieren → Lifecycle → Discord-Adapter (je Befehlsgruppe) → FEAT-008 → Aufräumen.
+
+### Authentifizierungsmodell (`api/dependencies.py`)
+
+- `get_principal` ist global registriert (`FastAPI(dependencies=[Depends(get_principal)])`); jede Route verlangt eine gültige Identität.
+- **Service-Principal:** gültiges `AUTH_SECRET` als `x-auth-token` oder `Authorization: Bearer`.
+- **Discord-Principal:** Header `x-internal-token` (zufälliger, prozessinterner `INTERNAL_TOKEN`) plus `x-discord-user-id`. `internal_headers(user_id)` baut diese Header. Der Token kann von außen nicht erraten werden; der Discord-Adapter darf ihn erst nach erfolgreicher Signaturprüfung setzen.
+- `require_registered`: Service-Aufrufer passieren; ein Discord-Nutzer muss in `dim_users` existieren, sonst 403.
+- `require_admin`: nur ein Discord-Nutzer mit Rolle `superadmin`. `AUTH_SECRET` allein ergibt 403; ein fehlgeschlagener Rollen-Lookup ergibt 502. (`superadmin` ist die einzige globale Admin-Rolle, die der bestehende Code als Admin behandelt; `server-admin` bleibt eine Prüfung pro Server in Whitelist-/Server-Logik. **Vom Nutzer nicht ausdrücklich bestätigt.**)
+- `get_user_role` liegt in `application/users.py`.
+
+### Entscheidungen des Nutzers
+
+- Discord ruft die App im selben Prozess auf.
+- Unregistrierte Discord-Nutzer dürfen nur `/users/register`, `/help` und `addgameaccount` verwenden.
+- Admin-only-Routen verlangen einen Discord-Admin; `AUTH_SECRET` reicht nicht.
+- Akzeptierte Verhaltensänderungen, sobald `rest_api.py` entfernt ist: das Body-Feld `action` funktioniert nicht mehr, unbekannte Pfade liefern FastAPIs 404-Body, falsche Methoden 405, ungültige Eingaben 422.
+- FEAT-008: Cooldown ignorieren und nicht speichern.
+
+### Entwickeln und testen
+
+```bash
+cd src && python3 -m pytest -q    # Stand: 104 Tests grün
+```
+
+- `tests/unit/test_auth.py` ist ein Vertragstest über alle Routen aus `app.openapi()`. Grund: FastAPI 0.143 listet eingebundene Router nicht in `app.routes`.
+- `tests/unit/api/conftest.py` überschreibt die Authentifizierung für Router-Unit-Tests.
+- HTTP-Client-Paket ist `httpx2` (Import `httpx2`). **Nicht geprüft**, ob dessen ASGI-Transport synchrone In-process-Aufrufe unterstützt; Starlettes `TestClient` funktioniert in den bestehenden Tests. Vor dem Discord-Adapter klären.
+- `scripts/run_user_tests.py` greift auf Live-Ressourcen zu und läuft nicht im normalen Testlauf.
+
+### VM-Agent
+
+Skripte liegen in `/opt/gameserver-agent/`; Dienste: `gameserver-{logs,tracker,control,guard}.service`; Secrets in `/mnt/gamespeicher/secrets.env`. Die Skripte kommen von `<GITHUB_REPO_RAW>/src/vm_agent/` (Fix `5a1c5bf`). Die Staging-VM `server-minecraft-test-2` wurde mit dem alten `bootstrap.sh` angelegt und hat ein leeres Agent-Verzeichnis; Wiederherstellung: die vier Skripte manuell per `curl` laden und `pip3 install` ausführen. Ob das geschehen ist, ist unbekannt.
+
+### Nicht verifiziert
+
+- Nichts wurde live gegen Lambda, GoDaddy, Supabase oder eine echte VM getestet.
+- Deploy- und GitHub-Actions-Status der Commits `885e1bc`, `5a1c5bf`, `e03f4f6` ist ungeprüft.
+- Der Wert von `GITHUB_REPO_RAW` in Staging (muss auf `/staging` enden) ist ungeprüft.
+
+### Offene Punkte
+
+- Nutzt ein Client andere Methoden als GET/POST auf `/dns/records` oder `/dns/sync` (jetzt 405)?
+- Produktfrage zur GoDaddy-Sync-Richtung (siehe Offene Entscheidungs- und Prüfstellen, Punkt 7; BUG-002/003).
+- BUG-005 (doppelte/verspätete Starts/Stops) könnte mit asynchronen Lambda-Retries zusammenhängen (unbestätigt). Günstiger Test: `MaximumRetryAttempts=0` am Worker.
+- Alias `handle_addgameaccount` in `rest_api.py` wird von `route_request` und drei Tests in `test_mojang.py` genutzt.
+
+---
+
+
 
 ## Architektur-Übersicht
 
@@ -59,8 +133,8 @@ Serverlose Steuerungs-Infrastruktur zur On-Demand-Bereitstellung, Verwaltung und
 * **Modulare Systemd-Agenten:** Statt eines monolithischen Skripts teilen vier spezialisierte Daemons die Aufgaben auf dem Server:
 * `gameserver-guard.service` (`lifecycle_guard.py`): Überwacht die Lebensdauer, warnt vor dem Ablauf und initiiert den Graceful Shutdown.
 * `gameserver-tracker.service` (`session_tracker.py`): Parst Docker-Logstreams live, cacht Spieler-Sessions im Volume und synchronisiert alle 10 Minuten gebündelt mit Supabase.
-* `gameserver-streamer.service` (`log_streamer.py`): Pufferung und Übertragung von Konsolen- und Systemlogs per Discord Webhook (drei Modi: `none`, `game`, `all`).
-* `gameserver-api.service` (`control_api.py`): Lokaler HTTP-Endpunkt auf Port 8080 für Remote-Steuerung (`/stop`, `/toggle-log`, `/emit-log`).
+* `gameserver-logs.service` (`log_streamer.py`): Pufferung und Übertragung von Konsolen- und Systemlogs per Discord Webhook (drei Modi: `none`, `game`, `all`).
+* `gameserver-control.service` (`control_api.py`): Lokaler HTTP-Endpunkt auf Port 8080 für Remote-Steuerung (`/stop`, `/toggle-log`, `/emit-log`).
 * **Offline-First Session Caching & Crash Recovery:**
 * Jede Session erhält lokal eine eindeutige UUIDv4.
 * Aktive Sessions werden minütlich mit einem Heartbeat (`fallback_end_at`) im Volume (`session_cache.json`) atomar gesichert.
@@ -114,7 +188,7 @@ Aktuell enthält `src/personal_server_hub/config.py` nur eine Spielkonfiguration
 
 ## REST Control Plane API
 
-Die konfigurierte öffentliche API-Basis ist `https://api.calvinkoch.ch`. `GET /help`, `GET /users/{discord_user_id}` sowie `POST /game-accounts` und `POST /users/register` werden von der FastAPI-Anwendung in `src/personal_server_hub/api/` bedient; die übrigen bestehenden Pfade werden vorerst weiterhin in `src/personal_server_hub/rest_api.py` geroutet. `/addgameaccount` und `POST /game-accounts` prüfen zuerst den Discord-Nutzer in `dim_users`; falls er nicht gefunden wird, wird er registriert und anschließend der Spielaccount verknüpft. `POST /users/register` registriert oder aktualisiert nur den Discord-Nutzer in `dim_users`, während `GET /users/{discord_user_id}` den Nutzer nach Discord-ID abruft. Diese authentifizierten REST-Endpunkte sind keine Discord-Slash-Commands. Die Lambda-Funktion prüft bei regulären REST-Anfragen den Token, verarbeitet `OPTIONS` für CORS und erwartet JSON für Requests mit Body.
+Die konfigurierte öffentliche API-Basis ist `https://api.calvinkoch.ch`. `GET /help`, `GET /users/{discord_user_id}`, `POST /game-accounts`, `POST /users/register`, `GET /dns/records` und `POST /dns/sync` werden von der FastAPI-Anwendung in `src/personal_server_hub/api/` bedient; die übrigen bestehenden Pfade werden vorerst weiterhin in `src/personal_server_hub/rest_api.py` geroutet. `/addgameaccount` und `POST /game-accounts` prüfen zuerst den Discord-Nutzer in `dim_users`; falls er nicht gefunden wird, wird er registriert und anschließend der Spielaccount verknüpft. `POST /users/register` registriert oder aktualisiert nur den Discord-Nutzer in `dim_users`, während `GET /users/{discord_user_id}` den Nutzer nach Discord-ID abruft. Diese authentifizierten REST-Endpunkte sind keine Discord-Slash-Commands. Die Lambda-Funktion prüft bei regulären REST-Anfragen den Token, verarbeitet `OPTIONS` für CORS und erwartet JSON für Requests mit Body.
 
 `GET /help` liefert die Hilfebeschreibung als JSON unter dem Feld `help`. `GET /users/{discord_user_id}` liefert `discord_user_id` und `discord_username` oder HTTP 404, falls der Nutzer fehlt. `POST /game-accounts` erwartet `discord_user_id`, `discord_username`, `game` und `username`. `POST /users/register` erwartet `discord_user_id` und `discord_username` (optional, Standardwert `Unknown`). Alle Routen verlangen wie die übrigen REST-Endpunkte einen gültigen Authentifizierungstoken.
 
@@ -128,7 +202,7 @@ Jede reguläre REST-Anfrage verlangt einen gültigen Token. Unterstützt werden 
 | `Authorization` | Alternativ `Bearer $AUTH_SECRET`. |
 | `Content-Type` | Für Requests mit JSON-Body: `application/json`. |
 
-Die Routen werden nach Pfad bzw. bei der Root-URL nach `action` ausgewählt. Die Implementierung erzwingt keine HTTP-Methode; die Beispiele unten verwenden `POST`.
+Die migrierten Routen (siehe „Start hier“) erzwingen ihre HTTP-Methode in FastAPI. Die übrigen Routen werden noch von `rest_api.py` nach Pfad bzw. bei der Root-URL nach `action` ausgewählt, ohne Methodenprüfung; die Beispiele unten verwenden `POST`. Zusätzlich gilt das Principal-Modell aus „Start hier“ (`AUTH_SECRET` oder interner Discord-Principal).
 
 ### Unterstützte Routen
 
@@ -235,7 +309,7 @@ Die PostgreSQL-Datenbank dient als relationale Single Source of Truth für Analy
 
 ## Hetzner-VM und persistentes Volume
 
-`hetzner/bootstrap.sh` lädt die Agent-Skripte zur VM nach `/opt/gameserver-agent/`. Das Hetzner-Volume wird nach `/mnt/gamespeicher` gemountet und enthält persistente Daten:
+`src/vm_agent/bootstrap.sh` lädt die Agent-Skripte von `<GITHUB_REPO_RAW>/src/vm_agent/<script>` zur VM nach `/opt/gameserver-agent/` und bricht bei einem fehlgeschlagenen Download ab. Der Branch ergibt sich aus dem Secret `GITHUB_REPO_RAW` (Staging muss auf `/staging` enden). Das Hetzner-Volume wird nach `/mnt/gamespeicher` gemountet und enthält persistente Daten:
 
 ```text
 /mnt/gamespeicher/
@@ -592,7 +666,7 @@ Diese Punkte werden als bestehendes Verhalten behandelt und bei der Migration du
 - Server-Stop ohne Auswahl nimmt derzeit den ersten aktiven Server. Bei nicht lesbarem Supabase-Serverkatalog fällt die Serverliste derzeit teilweise auf Hetzner-Instanzen zurück.
 - Die API-Implementierung erzwingt derzeit keine HTTP-Methode auf ihren REST-Pfaden. Die Migration soll die Methoden explizit machen; vorhandene Clients und tatsächlich genutzte Aufrufmethoden sind zuvor zu ermitteln.
 - Der Deployment-Workflow paketiert `src/personal_server_hub/` sowie Abhängigkeiten und verwendet `personal_server_hub.lambda_function.lambda_handler`. Er registriert globale Discord-Kommandos über Discords `PUT`-Route; die Definition liegt in `src/scripts/discord_commands.json`.
-- `hetzner/bootstrap.sh` lädt VM-Dateien einzeln nach festgelegten Pfaden; Systemd startet Skripte anhand konkreter Dateinamen. Umbenennung/Verschiebung ist daher ein Deployment-Änderungspaket, nicht nur ein lokales Refactoring.
+- `src/vm_agent/bootstrap.sh` lädt VM-Dateien einzeln nach festgelegten Pfaden; Systemd startet Skripte anhand konkreter Dateinamen. Umbenennung/Verschiebung ist daher ein Deployment-Änderungspaket, nicht nur ein lokales Refactoring.
 - `scripts/run_user_tests.py` ist als Live-Cloud-/Ressourcen-Test zu behandeln und nicht unaufgefordert im normalen Testlauf auszuführen.
 
 ### Vom Nutzer für dieses Refactoring vorgegeben
@@ -754,5 +828,5 @@ Diese Punkte werden nicht stillschweigend entschieden:
 | 2026-10-12 | Migration: DNS-Endpunkte | `GET /dns/records` und `POST /dns/sync` laufen über FastAPI (`api/routers/dns.py`, `application/dns.py`) mit expliziten HTTP-Methoden und sind in der Lambda-Weiterleitung freigeschaltet. `rest_api.handle_dns_*` delegiert an dieselben Use Cases, damit der alte Pfad-/`action`-Fallback kompatibel bleibt (Methoden dort weiterhin nicht erzwungen). Verhalten unverändert; Unit-Tests ergänzt. `handle_addgameaccount` bleibt vorerst als dünner Alias bestehen, da `route_request`-Aufrufer und bestehende Tests ihn nutzen. Nächste Schritte: Billing, Whitelist, Server. |
 | 2026-10-12 | DNS-Logik nach `application/dns.py` konsolidiert | Gesamte Logik aus `services/dns.py` (GoDaddy-HTTP, Supabase-Spiegelung, Subdomain-Regeln) liegt nun an einer Stelle in `application/dns.py`; `services/dns.py` ist nur noch ein Weiterleitungsmodul mit unveränderten Namen und Signaturen. Bekannte Abweichung vom Ziel: `application/dns.py` enthält noch den rohen GoDaddy-HTTP-Client und muss später nach `integrations/godaddy.py` aufgeteilt werden; danach `hetzner.py`/`rest_api.py` direkt auf `application.dns` umstellen und `services/dns.py` löschen. Korrektur: Die Aussage, `dns`/`json` in `rest_api.py` seien ungenutzt, war falsch (von stop/create/delete verwendet). Tests auf `application.dns` umgestellt, überholte `test_rest_api_dns_*` entfernt (abgedeckt durch `tests/unit/api/test_dns.py`). Nicht gegen Lambda/GoDaddy live geprüft. |
 | 2026-10-12 | Fix: VM-Agent-Download-Pfad | `bootstrap.sh` lud die Agent-Skripte noch von `<raw>/hetzner/<script>`; der Ordner existiert nicht mehr (Skripte liegen in `src/vm_agent/`). Folge: 404, leeres `/opt/gameserver-agent/`, Dienste ohne Skripte. Pfad auf `src/vm_agent/` korrigiert, Bootstrap bricht bei Download-Fehler jetzt mit Meldung ab. Test ergänzt. Der Branch kommt weiterhin aus `GITHUB_REPO_RAW` (Staging muss auf `/staging` zeigen). Nicht auf einer echten VM geprüft. |
-
 | 2026-10-12 | FastAPI-Authentifizierung | Neue Abhängigkeit `api/dependencies.py`, global an der App registriert: jede Route verlangt `AUTH_SECRET` (Service) oder einen Discord-Principal. Der Discord-Principal wird nur akzeptiert, wenn der Aufruf den prozessinternen, zufälligen `x-internal-token` mitsendet (kann von außen nicht erraten werden) – damit lässt sich eine `discord_user_id` nicht fälschen; der Discord-Adapter setzt ihn erst nach erfolgreicher Signaturprüfung. `require_registered` (Discord-Nutzer muss in `dim_users` stehen) und `require_admin` (nur Discord-Nutzer mit Rolle `superadmin`; `AUTH_SECRET` allein reicht bewusst nicht) stehen für die folgenden Migrationen bereit, sind aber noch an keiner Route aktiv. Unregistrierte Discord-Nutzer sollen später nur `/users/register`, `/help` und `addgameaccount` nutzen. Neue `get_user_role` in `application/users.py`. Vertragstest: jede Route (aus OpenAPI) lehnt Aufrufe ohne/mit falschem Secret mit 401 ab. Discord-Adapter nutzt die Principals noch nicht; Verhalten der bestehenden Pfade unverändert. |
+| 2026-10-12 | README-Übergabe | Kapitel „Start hier“ ergänzt (Ziel, Migrationsstatus, Auth-Modell, Entscheidungen, Tests, VM-Agent, Nicht-Verifiziertes, offene Punkte). Dienstnamen auf `gameserver-logs`/`gameserver-control` und Bootstrap-Pfad auf `src/vm_agent/bootstrap.sh` korrigiert; REST-Abschnitt an den Migrationsstand angepasst. Nur Dokumentation, kein Code geändert. |
