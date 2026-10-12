@@ -70,6 +70,34 @@ def test_handle_interaction_server_subcommand_start(mock_get_role, mock_start):
     assert call_payload.get("duration") == "2h"
 
 
+@patch("personal_server_hub.api.routers.servers.handle_servers")
+@patch("personal_server_hub.api.dependencies.get_user_role", return_value=(200, "user"))
+def test_handle_interaction_server_subcommand_status(mock_get_role, mock_handle_servers):
+    mock_handle_servers.return_value = (200, {"servers": [{"display_name": "minecraft-test-2", "status": "online", "ip": "1.2.3.4"}]})
+
+    payload = {
+        "type": 2,
+        "data": {
+            "name": "server",
+            "options": [
+                {
+                    "type": 1,
+                    "name": "status"
+                }
+            ]
+        },
+        "member": {
+            "user": {"id": "12345678", "username": "Calvin"}
+        }
+    }
+
+    res = discord_api.handle_interaction(payload)
+    assert res["statusCode"] == 200
+    assert "minecraft-test-2" in res["body"]["data"]["content"]
+    assert "online" in res["body"]["data"]["content"]
+    assert "1.2.3.4" in res["body"]["data"]["content"]
+
+
 @patch("personal_server_hub.api.routers.whitelist.add_whitelist")
 @patch("personal_server_hub.api.dependencies.get_user_role", return_value=(200, "user"))
 def test_handle_interaction_whitelist_subcommand(mock_get_role, mock_wl):

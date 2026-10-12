@@ -15,6 +15,19 @@ DISCORD_MESSAGE_CONTENT_LIMIT = 2000
 client = TestClient(app)
 
 
+def format_server_list(resp: dict) -> str:
+    servers = resp.get("servers", resp.get("data", []))
+    if not servers:
+        return "⚪ Keine registrierten Server vorhanden."
+    lines = ["🟢 **Registrierte Server:**"]
+    for s in servers:
+        name = s.get("display_name", s.get("name"))
+        st = s.get("status", "unknown")
+        ip = s.get("ip") or "offline"
+        lines.append(f"• **{name}** (`{st}`) — IP: `{ip}`")
+    return "\n".join(lines)
+
+
 def handle_interaction(body: dict, context=None) -> dict:
     interaction_type = body.get("type")
 
@@ -93,17 +106,7 @@ def handle_interaction(body: dict, context=None) -> dict:
     elif command == "status":
         res = client.get("/servers", headers=headers)
         resp = res.json()
-        servers = resp.get("servers", resp.get("data", []))
-        if not servers:
-            response_content = "⚪ Keine registrierten Server vorhanden."
-        else:
-            lines = ["🟢 **Registrierte Server:**"]
-            for s in servers:
-                name = s.get("display_name", s.get("name"))
-                st = s.get("status", "unknown")
-                ip = s.get("ip") or "offline"
-                lines.append(f"• **{name}** (`{st}`) — IP: `{ip}`")
-            response_content = "\n".join(lines)
+        response_content = format_server_list(resp)
     elif command == "server":
         if subcommand == "start":
             res = client.post("/start", json=sub_options, headers=headers)
@@ -120,7 +123,7 @@ def handle_interaction(body: dict, context=None) -> dict:
         elif subcommand == "status":
             res = client.get("/servers", headers=headers)
             resp = res.json()
-            response_content = str(resp)
+            response_content = format_server_list(resp)
         elif subcommand == "create":
             res = client.post("/server/create", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
             resp = res.json()
