@@ -10,7 +10,6 @@ load_runtime_secrets()
 from personal_server_hub.services.auth import is_authorized, verify_discord_signature
 from personal_server_hub.api.main import app
 import personal_server_hub.discord_api as discord_api
-import personal_server_hub.rest_api as rest_api
 
 AWS_REGION = os.environ.get("AWS_REGION", "eu-central-1")
 lambda_client = boto3.client("lambda", region_name=AWS_REGION)
@@ -117,48 +116,4 @@ def lambda_handler(event, context):
     if not is_internal_discord_call and not is_authorized(headers):
         return json_response(401, {"error": "Unauthorized"})
 
-    raw_path = event.get("rawPath") or event.get("path") or "/"
-    normalized_path = raw_path.rstrip("/")
-    if (
-        (normalized_path == "/help" and http_method == "GET")
-        or (normalized_path == "/dns/records" and http_method == "GET")
-        or (normalized_path == "/dns/sync" and http_method == "POST")
-        or (normalized_path == "/game-accounts" and http_method == "POST")
-        or (normalized_path == "/users/register" and http_method == "POST")
-        or (normalized_path == "/exchange-rate" and http_method == "POST")
-        or (normalized_path == "/costs" and http_method == "POST")
-        or (normalized_path == "/account" and http_method == "POST")
-        or (normalized_path == "/cash" and http_method == "POST")
-        or (normalized_path == "/whitelist/add" and http_method == "POST")
-        or (normalized_path == "/whitelist/remove" and http_method == "POST")
-        or (normalized_path == "/whitelist/list" and http_method == "POST")
-        or (normalized_path == "/server/start" and http_method == "POST")
-        or (normalized_path == "/start" and http_method == "POST")
-        or (normalized_path == "/server/stop" and http_method == "POST")
-        or (normalized_path == "/stop" and http_method == "POST")
-        or (normalized_path == "/server/create" and http_method == "POST")
-        or (normalized_path == "/server/delete" and http_method == "POST")
-        or (normalized_path == "/log" and http_method == "POST")
-        or (normalized_path == "/server/reload-files" and http_method == "POST")
-        or (normalized_path == "/servers" and http_method == "GET")
-        or (
-            normalized_path.startswith("/users/")
-            and normalized_path.count("/") == 2
-            and http_method == "GET"
-        )
-    ):
-        return asgi_handler(event, context)
-
-    body = {}
-    if raw_body:
-        try:
-            body = json.loads(raw_body)
-        except Exception:
-            pass
-
-    try:
-        status_code, resp_body = rest_api.route_request(raw_path, body)
-        return json_response(status_code, resp_body)
-    except Exception as e:
-        print(f"[REST ROUTING ERROR] {e}")
-        return json_response(500, {"error": str(e)})
+    return asgi_handler(event, context)

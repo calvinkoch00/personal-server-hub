@@ -1,6 +1,6 @@
 import re
 import datetime
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.billing import get_costs_summary
 from personal_server_hub.services.supabase import supabase_client_request
 
 def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
@@ -69,7 +69,7 @@ def handle_costs(data: dict, caller_id: str) -> str:
         "to_date": end_dt.isoformat() if end_dt else None
     }
 
-    status, resp = rest_api.handle_costs(payload)
+    status, resp = get_costs_summary(payload)
     if status != 200:
         return resp.get("error", "Fehler")
 

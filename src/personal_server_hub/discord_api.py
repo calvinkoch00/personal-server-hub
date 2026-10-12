@@ -53,9 +53,8 @@ def handle_interaction(body: dict, context=None) -> dict:
                     "body": {"type": 4, "data": {"content": "⛔ Du bist nicht berechtigt, diese Aktion zu bestätigen.", "flags": 64}}
                 }
 
-            # Import erst hier lokal, um zirkuläre Ladekonflikte beim Booten zu verhindern
-            import personal_server_hub.rest_api as rest_api
-            status, resp = rest_api.handle_server_delete({
+            from personal_server_hub.application.servers import handle_server_delete
+            status, resp = handle_server_delete({
                 "server_name": server_slug,
                 "discord_user_id": caller_id
             })

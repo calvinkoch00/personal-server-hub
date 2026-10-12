@@ -1,6 +1,6 @@
 import json
 from unittest.mock import patch
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.whitelist import add_whitelist
 
 
 @patch("personal_server_hub.services.hetzner.list_servers")
@@ -39,7 +39,7 @@ def test_handle_whitelist_add_with_hetzner_live_sync(mock_sb, mock_hetzner_list)
     with patch("personal_server_hub.services.agent.add_remote_whitelist") as mock_agent_add:
         mock_agent_add.return_value = {"status": "ok"}
 
-        status, body = rest_api.handle_whitelist_add({
+        status, body = add_whitelist({
             "server_name": "default",
             "username": "Steve",
             "discord_user_id": "admin-id",
@@ -78,7 +78,7 @@ def test_handle_whitelist_add_forbidden_other_user(mock_sb, mock_hetzner_list):
         }]))
     ]
 
-    status, body = rest_api.handle_whitelist_add({
+    status, body = add_whitelist({
         "server_name": "skyblock",
         "username": "Alex",
         "discord_user_id": "stranger-id",

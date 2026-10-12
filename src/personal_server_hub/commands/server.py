@@ -1,5 +1,12 @@
 import os
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.servers import (
+    handle_servers,
+    handle_stop,
+    handle_start,
+    handle_server_create,
+    handle_log as app_handle_log,
+    handle_server_reload_files,
+)
 
 def get_help_message() -> str:
     return (
@@ -36,7 +43,7 @@ def get_help_message() -> str:
     )
 
 def handle_status() -> str:
-    _, resp = rest_api.handle_servers()
+    _, resp = handle_servers()
     servers = resp.get("servers", resp.get("data", []))
     if not servers:
         return "⚪ Keine registrierten Server vorhanden."
@@ -52,7 +59,7 @@ def handle_status() -> str:
     return "🖥️ **Server-Übersicht:**\n" + "\n".join(lines)
 
 def handle_stop(payload: dict | None = None) -> str:
-    status, resp = rest_api.handle_stop(payload or {})
+    status, resp = handle_stop(payload or {})
     if status == 400:
         return "⚪ Kein laufender Server zum Stoppen vorhanden."
     if status == 404:
@@ -71,7 +78,7 @@ def handle_start(data: dict) -> str:
         options["server_name"] = options.pop("name")
 
     try:
-        status, resp = rest_api.handle_start(options)
+        status, resp = handle_start(options)
         if status != 200:
             return f"❌ Fehler beim Starten des Servers: {resp.get('error')}"
 
@@ -98,7 +105,7 @@ def handle_create(data: dict, caller_id: str) -> str:
         "custom_subdomain": options.get("subdomain"),
         "discord_user_id": caller_id
     }
-    status, resp = rest_api.handle_server_create(payload)
+    status, resp = handle_server_create(payload)
     if status == 201:
         srv = resp.get("server", {})
         slug = srv.get("server_slug") or resp.get("server_slug") or options.get("name")
@@ -147,7 +154,7 @@ def handle_log(data: dict) -> str:
     mode = str(options.get("mode", "game")).strip().lower()
     server_param = str(options.get("server") or options.get("name") or "default").strip()
 
-    status, resp = rest_api.handle_log({"mode": mode, "server_name": server_param})
+    status, resp = app_handle_log({"mode": mode, "server_name": server_param})
     if status != 200:
         return f"⚠ {resp.get('error')}"
 
@@ -162,7 +169,7 @@ def handle_reload_files(sub_options: dict) -> str:
     if not server_param:
         return "❌ Bitte gib einen Servernamen an."
 
-    status, resp = rest_api.handle_server_reload_files({"server_name": server_param})
+    status, resp = handle_server_reload_files({"server_name": server_param})
     if status == 200:
         return f"🔄 **Zero-Downtime Reload:** {resp.get('message')}"
     return f"❌ {resp.get('error')}"

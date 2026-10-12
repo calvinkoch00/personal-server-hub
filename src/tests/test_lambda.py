@@ -34,8 +34,20 @@ def test_start_endpoint_success(mock_create, auth_headers):
     }
 
     event = {
+        "version": "2.0",
         "rawPath": "/start",
-        "headers": auth_headers,
+        "rawQueryString": "",
+        "headers": {**auth_headers, "content-type": "application/json"},
+        "requestContext": {
+            "http": {
+                "method": "POST",
+                "path": "/start",
+                "protocol": "HTTP/1.1",
+                "sourceIp": "127.0.0.1",
+                "userAgent": "pytest",
+            }
+        },
+        "isBase64Encoded": False,
         "body": json.dumps({"game": "minecraft", "duration": "2h"})
     }
     response = lambda_handler(event, None)
@@ -253,8 +265,20 @@ def test_stop_server_endpoint(mock_list, mock_delete, mock_sb, auth_headers):
     mock_sb.return_value = (200, "[]")
 
     event = {
+        "version": "2.0",
         "rawPath": "/stop",
-        "headers": auth_headers,
+        "rawQueryString": "",
+        "headers": {**auth_headers, "content-type": "application/json"},
+        "requestContext": {
+            "http": {
+                "method": "POST",
+                "path": "/stop",
+                "protocol": "HTTP/1.1",
+                "sourceIp": "127.0.0.1",
+                "userAgent": "pytest",
+            }
+        },
+        "isBase64Encoded": False,
         "body": json.dumps({"server_id": 98765})
     }
     response = lambda_handler(event, None)

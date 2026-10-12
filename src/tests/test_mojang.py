@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch, MagicMock
 from personal_server_hub.services import mojang
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.game_accounts import add_game_account
 
 def test_format_uuid():
     raw = "069a79f444e94726a5befca90e38aaf5"
@@ -36,7 +36,7 @@ def test_handle_addgameaccount_minecraft_success(mock_sb, mock_mojang):
         (201, json.dumps([{"id": "uuid-123"}])) # insert dim_game_accounts
     ]
 
-    status, body = rest_api.handle_addgameaccount({
+    status, body = add_game_account({
         "discord_user_id": "123456",
         "discord_username": "calvin",
         "game": "minecraft",
@@ -52,7 +52,7 @@ def test_handle_addgameaccount_minecraft_success(mock_sb, mock_mojang):
 def test_handle_addgameaccount_minecraft_not_found(mock_mojang):
     mock_mojang.return_value = (None, None)
 
-    status, body = rest_api.handle_addgameaccount({
+    status, body = add_game_account({
         "discord_user_id": "123456",
         "discord_username": "calvin",
         "game": "minecraft",
@@ -72,7 +72,7 @@ def test_handle_addgameaccount_stops_when_user_registration_fails(mock_sb, mock_
         (401, "Invalid Supabase key"),
     ]
 
-    status, body = rest_api.handle_addgameaccount({
+    status, body = add_game_account({
         "discord_user_id": "123456",
         "discord_username": "calvin",
         "game": "minecraft",

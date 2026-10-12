@@ -1,5 +1,6 @@
 import json
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.billing import get_account_balance, add_cash_payment
+from personal_server_hub.application.whitelist import add_whitelist, remove_whitelist, list_whitelist
 from personal_server_hub.application.game_accounts import add_game_account
 from personal_server_hub.commands.finance import resolve_discord_user_id
 from personal_server_hub.services.supabase import supabase_client_request
@@ -9,7 +10,7 @@ def handle_account(data: dict, caller_id: str) -> str:
     user_param = str(options.get("user", "me")).strip()
 
     if user_param.lower() == "all":
-        status, resp = rest_api.handle_account({"user": "all"})
+        status, resp = get_account_balance({"user": "all"})
         if status != 200:
             return resp.get("error", "Fehler")
 
@@ -35,7 +36,7 @@ def handle_account(data: dict, caller_id: str) -> str:
         if not target_uid:
             return f"❌ Nutzer `{user_param}` konnte nicht gefunden werden."
 
-        status, resp = rest_api.handle_account({"user": "single", "target_uid": target_uid})
+        status, resp = get_account_balance({"user": "single", "target_uid": target_uid})
         if status != 200:
             return resp.get("error", "Fehler")
 
@@ -86,7 +87,7 @@ def handle_cash(data: dict, caller_id: str, caller_name: str) -> str:
     if not amount_raw or float(amount_raw) <= 0:
         return "❌ Bitte gib einen gültigen Betrag größer als 0 an."
 
-    status, resp = rest_api.handle_cash({
+    status, resp = add_cash_payment({
         "target_uid": target_uid,
         "amount": amount_raw,
         "currency": currency,
@@ -154,7 +155,7 @@ def handle_whitelist(subcommand: str, sub_options: dict, caller_id: str) -> str:
             "discord_user_id": caller_id,
             "role": role
         }
-        status, resp = rest_api.handle_whitelist_add(payload)
+        status, resp = add_whitelist(payload)
         if status != 200:
             return f"❌ {resp.get('error')}"
 
@@ -168,7 +169,7 @@ def handle_whitelist(subcommand: str, sub_options: dict, caller_id: str) -> str:
             "username": user,
             "discord_user_id": caller_id
         }
-        status, resp = rest_api.handle_whitelist_remove(payload)
+        status, resp = remove_whitelist(payload)
         if status != 200:
             return f"❌ {resp.get('error')}"
         sync_txt = " (Live vom laufenden Server entfernt!)" if resp.get("live_synced") else ""
@@ -176,7 +177,7 @@ def handle_whitelist(subcommand: str, sub_options: dict, caller_id: str) -> str:
 
     elif subcommand == "list":
         payload = {"server": server_name}
-        status, resp = rest_api.handle_whitelist_list(payload)
+        status, resp = list_whitelist(payload)
         if status != 200:
             return f"❌ {resp.get('error')}"
 

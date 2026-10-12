@@ -18,7 +18,7 @@ class ServerStartRequest(BaseModel):
 class ServerStopRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    server_id: str | None = None
+    server_id: int | str | None = None
     server: str | None = None
     server_name: str | None = None
     server_slug: str | None = None

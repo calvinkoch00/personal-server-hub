@@ -10,7 +10,10 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "aws_lambda"))
 # .env direkt laden
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.dns import sync_dns_records
+from personal_server_hub.application.game_accounts import add_game_account
+from personal_server_hub.application.servers import handle_server_create, handle_server_delete
+from personal_server_hub.application.whitelist import add_whitelist, list_whitelist
 
 print("=" * 60)
 print("🚀 STARTE LOKALE END-TO-END VALIDIERUNG MIT LIVE-DATENBANK")
@@ -23,7 +26,7 @@ print("=" * 60)
 # Test 1: Feature 1 - DNS Sync & Katalogisierung
 # ------------------------------------------------------------------
 print("\n[TEST 1] Prüfe GoDaddy DNS Catalog Sync...")
-status, body = rest_api.route_request("/dns/sync", {})
+status, body = sync_dns_records()
 if status == 200 and "synced_count" in body:
     print(f"  ✓ DNS Sync erfolgreich: {body.get('synced_count')} Records katalogisiert.")
 else:
@@ -34,7 +37,7 @@ else:
 # ------------------------------------------------------------------
 print("\n[TEST 2] Prüfe Mojang Account Binding & UUID Resolution...")
 # 2a. Ungültiger Account (gültige Minecraft-Namenssyntax, existiert aber nicht)
-status, body = rest_api.route_request("/addgameaccount", {
+status, body = add_game_account({
     "discord_user_id": "432141301111324672",
     "discord_username": "gamesbond00",
     "game": "minecraft",
@@ -46,7 +49,7 @@ else:
     print(f"  ✗ Erwartetes 404 nicht erhalten ({status}): {body}")
 
 # 2b. Echter Account mit deiner verknüpften Discord-ID
-status, body = rest_api.route_request("/addgameaccount", {
+status, body = add_game_account({
     "discord_user_id": "432141301111324672",
     "discord_username": "gamesbond00",
     "game": "minecraft",
@@ -64,7 +67,7 @@ print("\n[TEST 3] Prüfe Server Lifecycle & Dynamische Hetzner Volumes...")
 test_srv_slug = f"e2etest_{int(time.time())}"
 
 # 3a. Server erstellen
-status, body = rest_api.route_request("/server/create", {
+status, body = handle_server_create({
     "game": "minecraft",
     "server_name": test_srv_slug,
     "discord_user_id": "test_e2e_user"
@@ -84,7 +87,7 @@ time.sleep(2)
 # Test 4: Feature 4 - Hybrid Whitelist
 # ------------------------------------------------------------------
 print("\n[TEST 4] Prüfe Hybrid Whitelist...")
-status, body = rest_api.route_request("/whitelist/add", {
+status, body = add_whitelist({
     "server_name": test_srv_slug,
     "game": "minecraft",
     "username": "gamesbond00",
@@ -97,7 +100,7 @@ else:
     print(f"  ✗ Whitelist Add fehlgeschlagen ({status}): {body}")
 
 # Whitelist auslesen
-status, body = rest_api.route_request("/whitelist/list", {
+status, body = list_whitelist({
     "server_name": test_srv_slug,
     "game": "minecraft"
 })
@@ -113,7 +116,7 @@ time.sleep(2)
 # Aufräumen: Test-Server wieder löschen
 # ------------------------------------------------------------------
 print("\n[CLEANUP] Lösche erstellten Test-Server und Hetzner Volume wieder...")
-status, body = rest_api.route_request("/server/delete", {
+status, body = handle_server_delete({
     "server_name": test_srv_slug,
     "discord_user_id": "test_e2e_user"
 })

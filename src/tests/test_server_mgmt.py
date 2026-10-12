@@ -2,7 +2,7 @@ import json
 from unittest.mock import patch, MagicMock
 from personal_server_hub.services import hetzner
 from personal_server_hub.services.dns import fallback_server_subdomain
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application.servers import handle_server_create, handle_stop
 
 
 def test_fallback_server_subdomain_uses_game_default_or_slug():
@@ -112,7 +112,7 @@ def test_handle_server_create(mock_sb, mock_vol, mock_dns):
         (200, "[]")  # 3. Creator Game Accounts Abfrage für Auto-Whitelist
     ]
 
-    status, body = rest_api.handle_server_create({
+    status, body = handle_server_create({
         "game": "minecraft",
         "server_name": "skyblock",
         "discord_user_id": "432141301111324672"
@@ -129,7 +129,7 @@ def test_handle_server_create(mock_sb, mock_vol, mock_dns):
 
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_server_create_invalid_name(mock_sb):
-    status, body = rest_api.handle_server_create({
+    status, body = handle_server_create({
         "game": "minecraft",
         "server_name": "Invalid Name with Spaces!!",
         "discord_user_id": "432141301111324672"
@@ -156,7 +156,7 @@ def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mo
         (200, json.dumps([{"subdomain": "sky"}]))  # 3. Select dim_dns_records
     ]
 
-    status, body = rest_api.handle_stop({"name": "skyblock"})
+    status, body = handle_stop({"name": "skyblock"})
     assert status == 200
     assert body["mode"] == "graceful"
     mock_dns.assert_called_with("0.0.0.0", subdomain="sky", server_id="srv-sky")
@@ -186,7 +186,7 @@ def test_handle_stop_uses_game_default_when_no_dns_record(
         (200, "[]"),
     ]
 
-    status, body = rest_api.handle_stop({"name": "default"})
+    status, body = handle_stop({"name": "default"})
 
     assert status == 200
     assert body["mode"] == "graceful"
