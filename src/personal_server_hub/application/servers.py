@@ -312,3 +312,79 @@ def handle_server_delete(payload: dict) -> tuple[int, dict]:
     )
     return 200, {"message": f"Server '{srv['display_name']}' und zugehörige DNS-Einträge gelöscht"}
 
+
+
+def handle_log(payload: dict) -> tuple[int, dict]:
+    raw_mode = str(payload.get("mode", payload.get("logging", "game"))).strip().lower()
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    server_slug = resolve_server_slug(payload.get("server_name") or payload.get("server_slug") or payload.get("server") or payload.get("name"), game=game)
+
+    mode = "none" if raw_mode in ["off", "none", "false", "0"] else raw_mode
+    if mode not in ["all", "game", "none"]:
+        mode = "game"
+
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_slug=eq.{server_slug}&status=neq.deleted",
+        method="GET",
+    )
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{server_slug}' nicht gefunden"}
+
+    srv = json.loads(resp_s)[0]
+    srv_id = srv["server_id"]
+    vm_full_name = srv.get("full_name")
+
+    supabase.supabase_client_request(
+        f"dim_servers?server_id=eq.{srv_id}",
+        method="PATCH",
+        data={"log_status": mode},
+    )
+
+    live_synced = False
+    active_servers = hetzner.list_servers()
+    matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
+
+    if matched_vm and matched_vm.get("ip"):
+        try:
+            agent_mode = "off" if mode == "none" else mode
+            res_agent = agent.toggle_remote_logging(matched_vm["ip"], mode=agent_mode)
+            live_synced = True
+        except Exception as e:
+            print(f"[LOG SYNC ERROR] {e}")
+
+    return 200, {
+        "server": srv["display_name"],
+        "server_slug": server_slug,
+        "mode": mode,
+        "live_synced": live_synced,
+    }
+
+
+def handle_server_reload_files(payload: dict) -> tuple[int, dict]:
+    game = str(payload.get("game", "minecraft")).strip().lower()
+    raw_slug = resolve_server_slug(payload.get("server_name") or payload.get("server") or payload.get("name"), game=game)
+
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_slug=eq.{raw_slug}&status=neq.deleted",
+        method="GET",
+    )
+    if status_s != 200 or not json.loads(resp_s):
+        return 404, {"error": f"Server '{raw_slug}' nicht in der Datenbank gefunden."}
+
+    srv = json.loads(resp_s)[0]
+    vm_full_name = srv.get("full_name")
+
+    active_servers = hetzner.list_servers()
+    matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
+
+    if not matched_vm or not matched_vm.get("ip"):
+        return 400, {"error": f"Server '{raw_slug}' läuft aktuell nicht. Dateien werden beim nächsten Start automatisch frisch gezogen."}
+
+    res_agent = agent.reload_remote_files(matched_vm["ip"])
+    if res_agent.get("status") == "ok":
+        return 200, {
+            "message": f"Dateien auf `{srv['display_name']}` erfolgreich neu geladen & Dienste neu gestartet!",
+            "details": res_agent,
+        }
+    return 500, {"error": f"Reload fehlgeschlagen: {res_agent.get('error', res_agent.get('message'))}"}
+

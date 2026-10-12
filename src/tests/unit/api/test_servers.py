@@ -48,3 +48,20 @@ def test_servers_list_endpoint(mock_list):
 def test_server_create_validation_invalid_slug():
     response = client.post("/server/create", json={"server": "INVALID SLUG!"})
     assert response.status_code == 422
+
+
+@patch("personal_server_hub.api.routers.servers.handle_log")
+def test_server_log_endpoint(mock_log):
+    mock_log.return_value = (200, {"mode": "game"})
+    response = client.post("/log", json={"mode": "game", "server": "default"})
+    assert response.status_code == 200
+    assert response.json() == {"mode": "game"}
+
+
+@patch("personal_server_hub.api.routers.servers.handle_server_reload_files")
+def test_server_reload_files_endpoint(mock_reload):
+    mock_reload.return_value = (200, {"message": "Files reloaded"})
+    response = client.post("/server/reload-files", json={"server": "default"})
+    assert response.status_code == 200
+    assert response.json() == {"message": "Files reloaded"}
+

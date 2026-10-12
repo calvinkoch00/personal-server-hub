@@ -127,6 +127,8 @@ def lambda_handler(event, context):
         or (normalized_path == "/stop" and http_method == "POST")
         or (normalized_path == "/server/create" and http_method == "POST")
         or (normalized_path == "/server/delete" and http_method == "POST")
+        or (normalized_path == "/log" and http_method == "POST")
+        or (normalized_path == "/server/reload-files" and http_method == "POST")
         or (normalized_path == "/servers" and http_method == "GET")
         or (
             normalized_path.startswith("/users/")

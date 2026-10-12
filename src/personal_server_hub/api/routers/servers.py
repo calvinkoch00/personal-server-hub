@@ -5,12 +5,16 @@ from personal_server_hub.api.dependencies import require_registered
 from personal_server_hub.api.schemas.servers import (
     ServerCreateRequest,
     ServerDeleteRequest,
+    ServerLogRequest,
+    ServerReloadFilesRequest,
     ServerStartRequest,
     ServerStopRequest,
 )
 from personal_server_hub.application.servers import (
+    handle_log,
     handle_server_create,
     handle_server_delete,
+    handle_server_reload_files,
     handle_servers,
     handle_start,
     handle_stop,
@@ -46,6 +50,23 @@ def delete_server(payload: ServerDeleteRequest) -> JSONResponse:
 
 
 @router.get("/servers", dependencies=[Depends(require_registered)])
+def list_servers() -> JSONResponse:
+    status_code, response = handle_servers()
+    return JSONResponse(status_code=status_code, content=response)
+
+
+
+@router.post("/log", dependencies=[Depends(require_registered)])
+def set_server_log(payload: ServerLogRequest) -> JSONResponse:
+    status_code, response = handle_log(payload.model_dump())
+    return JSONResponse(status_code=status_code, content=response)
+
+
+@router.post("/server/reload-files", dependencies=[Depends(require_registered)])
+def reload_server_files(payload: ServerReloadFilesRequest) -> JSONResponse:
+    status_code, response = handle_server_reload_files(payload.model_dump())
+    return JSONResponse(status_code=status_code, content=response)
+
 def list_servers() -> JSONResponse:
     status_code, response = handle_servers()
     return JSONResponse(status_code=status_code, content=response)

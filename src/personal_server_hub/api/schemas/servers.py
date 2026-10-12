@@ -58,3 +58,26 @@ class ServerDeleteRequest(BaseModel):
     server_slug: str | None = None
     name: str | None = None
     discord_user_id: str | None = None
+
+
+class ServerLogRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    game: str = Field(default="minecraft", min_length=1, max_length=50)
+    server: str | None = None
+    server_name: str | None = None
+    server_slug: str | None = None
+    name: str | None = None
+    mode: str | None = "game"
+    logging: str | None = None
+
+
+class ServerReloadFilesRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    game: str = Field(default="minecraft", min_length=1, max_length=50)
+    server: str | None = None
+    server_name: str | None = None
+    server_slug: str | None = None
+    name: str | None = None
+
