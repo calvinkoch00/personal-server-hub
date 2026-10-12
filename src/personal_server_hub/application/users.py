@@ -1,6 +1,6 @@
 import json
 
-from personal_server_hub.services import supabase
+from personal_server_hub.integrations import supabase
 
 
 def register_user(payload: dict) -> tuple[int, dict]:

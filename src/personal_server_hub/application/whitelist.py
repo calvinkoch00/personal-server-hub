@@ -1,6 +1,6 @@
 import json
 
-from personal_server_hub.services import agent, hetzner, supabase
+from personal_server_hub.integrations import agent, hetzner, supabase
 
 
 def resolve_server_slug(raw_name: str | None, game: str = "minecraft") -> str:

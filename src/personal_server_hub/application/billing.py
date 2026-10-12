@@ -1,6 +1,6 @@
 import json
 
-from personal_server_hub.services import fx, supabase
+from personal_server_hub.integrations import fx, supabase
 
 
 def get_exchange_rate(payload: dict) -> tuple[int, dict]:

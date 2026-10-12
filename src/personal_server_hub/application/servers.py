@@ -2,7 +2,8 @@ import json
 import re
 from datetime import datetime, timezone
 
-from personal_server_hub.services import agent, dns, hetzner, supabase
+from personal_server_hub.application import dns
+from personal_server_hub.integrations import agent, hetzner, supabase
 
 
 def resolve_server_slug(raw_name: str | None, game: str = "minecraft") -> str:

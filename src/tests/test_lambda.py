@@ -19,7 +19,7 @@ def test_unauthorized_request():
 
 
 # 2. Server Start Test
-@patch("personal_server_hub.services.hetzner.create_server")
+@patch("personal_server_hub.integrations.hetzner.create_server")
 def test_start_endpoint_success(mock_create, auth_headers):
     mock_create.return_value = {
         "server_id": 123456,
@@ -60,7 +60,7 @@ def test_start_endpoint_success(mock_create, auth_headers):
 
 
 # 3. Server List Test
-@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
 def test_list_servers_endpoint(mock_sb, auth_headers):
     mock_sb.return_value = (
         200,
@@ -250,9 +250,9 @@ def test_get_user_endpoint_is_served_by_fastapi(mock_get_user, auth_headers):
 
 
 # 4. Stop Server Test
-@patch("personal_server_hub.services.supabase.supabase_client_request")
-@patch("personal_server_hub.services.hetzner.delete_server")
-@patch("personal_server_hub.services.hetzner.list_servers")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.hetzner.delete_server")
+@patch("personal_server_hub.integrations.hetzner.list_servers")
 def test_stop_server_endpoint(mock_list, mock_delete, mock_sb, auth_headers):
     mock_list.return_value = [
         {

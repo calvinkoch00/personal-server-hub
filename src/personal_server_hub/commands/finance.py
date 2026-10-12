@@ -1,7 +1,7 @@
 import re
 import datetime
 from personal_server_hub.application.billing import get_costs_summary
-from personal_server_hub.services.supabase import supabase_client_request
+from personal_server_hub.integrations.supabase import supabase_client_request
 
 def resolve_discord_user_id(user_param: str, caller_id: str) -> tuple[str | None, str]:
     import json

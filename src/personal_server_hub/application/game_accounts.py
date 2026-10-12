@@ -1,7 +1,7 @@
 import json
 
 from personal_server_hub.application.users import get_user, register_user
-from personal_server_hub.services import mojang, supabase
+from personal_server_hub.integrations import mojang, supabase
 
 
 def add_game_account(payload: dict) -> tuple[int, dict]:

@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch, MagicMock
 from personal_server_hub.services import hetzner
-from personal_server_hub.services.dns import fallback_server_subdomain
+from personal_server_hub.application.dns import fallback_server_subdomain
 from personal_server_hub.application.servers import handle_server_create, handle_stop
 
 
@@ -11,9 +11,9 @@ def test_fallback_server_subdomain_uses_game_default_or_slug():
     assert fallback_server_subdomain("minecraft", "skyblock") == "skyblock"
 
 
-@patch("personal_server_hub.services.hetzner.supabase_client_request")
+@patch("personal_server_hub.integrations.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")
-@patch("personal_server_hub.services.hetzner.update_godaddy_dns")
+@patch("personal_server_hub.integrations.hetzner.update_godaddy_dns")
 def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb, monkeypatch):
     monkeypatch.setenv("GODADDY_DOMAIN", "calvinkoch.ch")
 
@@ -45,7 +45,7 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb, monke
     hetzner_resp.__enter__.return_value = hetzner_resp
     mock_urlopen.return_value = hetzner_resp
 
-    with patch("personal_server_hub.services.hetzner.log_server_start_to_supabase") as mock_log:
+    with patch("personal_server_hub.integrations.hetzner.log_server_start_to_supabase") as mock_log:
         res = hetzner.create_server(game="minecraft", server_name="default", seconds=300)
 
         assert res["server_id"] == 101
@@ -58,9 +58,9 @@ def test_create_server_dynamic_resolution(mock_dns, mock_urlopen, mock_sb, monke
         assert mock_log.called
 
 
-@patch("personal_server_hub.services.hetzner.supabase_client_request")
+@patch("personal_server_hub.integrations.hetzner.supabase_client_request")
 @patch("urllib.request.urlopen")
-@patch("personal_server_hub.services.hetzner.update_godaddy_dns")
+@patch("personal_server_hub.integrations.hetzner.update_godaddy_dns")
 def test_create_server_uses_game_default_when_no_dns_record(
     mock_dns, mock_urlopen, mock_sb, monkeypatch
 ):
@@ -88,7 +88,7 @@ def test_create_server_uses_game_default_when_no_dns_record(
     hetzner_resp.__enter__.return_value = hetzner_resp
     mock_urlopen.return_value = hetzner_resp
 
-    with patch("personal_server_hub.services.hetzner.log_server_start_to_supabase"):
+    with patch("personal_server_hub.integrations.hetzner.log_server_start_to_supabase"):
         result = hetzner.create_server(server_name="default")
 
     assert result["domain"] == "minecraft-default.calvinkoch.ch"
@@ -98,8 +98,8 @@ def test_create_server_uses_game_default_when_no_dns_record(
 
 
 @patch("personal_server_hub.application.dns.update_godaddy_dns")
-@patch("personal_server_hub.services.hetzner.create_volume")
-@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.hetzner.create_volume")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
 def test_handle_server_create(mock_sb, mock_vol, mock_dns):
     mock_vol.return_value = {"id": 12345678}
     mock_sb.side_effect = [
@@ -127,7 +127,7 @@ def test_handle_server_create(mock_sb, mock_vol, mock_dns):
     )
     assert mock_sb.call_args_list[1].kwargs["data"]["hetzner_location"] == "nbg1"
 
-@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
 def test_handle_server_create_invalid_name(mock_sb):
     status, body = handle_server_create({
         "game": "minecraft",
@@ -139,9 +139,9 @@ def test_handle_server_create_invalid_name(mock_sb):
 
 @patch("personal_server_hub.application.dns.find_subdomains_by_ip")
 @patch("personal_server_hub.application.dns.update_godaddy_dns")
-@patch("personal_server_hub.services.supabase.supabase_client_request")
-@patch("personal_server_hub.services.agent.stop_remote_server")
-@patch("personal_server_hub.services.hetzner.list_servers")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.agent.stop_remote_server")
+@patch("personal_server_hub.integrations.hetzner.list_servers")
 def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mock_find_subs):
     mock_find_subs.return_value = []
     mock_list.return_value = [{
@@ -164,9 +164,9 @@ def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mo
 
 @patch("personal_server_hub.application.dns.find_subdomains_by_ip", return_value=[])
 @patch("personal_server_hub.application.dns.update_godaddy_dns")
-@patch("personal_server_hub.services.supabase.supabase_client_request")
-@patch("personal_server_hub.services.agent.stop_remote_server", return_value={"status": "stopping"})
-@patch("personal_server_hub.services.hetzner.list_servers")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.agent.stop_remote_server", return_value={"status": "stopping"})
+@patch("personal_server_hub.integrations.hetzner.list_servers")
 def test_handle_stop_uses_game_default_when_no_dns_record(
     mock_list, mock_agent, mock_sb, mock_dns, mock_find_subs
 ):

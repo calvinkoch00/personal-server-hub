@@ -6,7 +6,7 @@ import os
 import json
 import urllib.request
 from datetime import datetime, timezone
-from personal_server_hub.services.supabase import supabase_client_request
+from personal_server_hub.integrations.supabase import supabase_client_request
 
 GODADDY_API_KEY = os.environ.get("GODADDY_API_KEY")
 GODADDY_API_SECRET = os.environ.get("GODADDY_API_SECRET")

@@ -1,6 +1,6 @@
 import json
 from unittest.mock import patch, MagicMock
-from personal_server_hub.services import mojang
+from personal_server_hub.integrations import mojang
 from personal_server_hub.application.game_accounts import add_game_account
 
 def test_format_uuid():
@@ -25,8 +25,8 @@ def test_get_mojang_profile_success(mock_urlopen):
     assert uuid == "069a79f4-44e9-4726-a5be-fca90e38aaf5"
     assert name == "Notch"
 
-@patch("personal_server_hub.services.mojang.get_mojang_profile")
-@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.mojang.get_mojang_profile")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
 def test_handle_addgameaccount_minecraft_success(mock_sb, mock_mojang):
     mock_mojang.return_value = ("069a79f4-44e9-4726-a5be-fca90e38aaf5", "Notch")
     mock_sb.side_effect = [
@@ -48,7 +48,7 @@ def test_handle_addgameaccount_minecraft_success(mock_sb, mock_mojang):
     assert body["username"] == "Notch"
     assert body["mojang_uuid"] == "069a79f4-44e9-4726-a5be-fca90e38aaf5"
 
-@patch("personal_server_hub.services.mojang.get_mojang_profile")
+@patch("personal_server_hub.integrations.mojang.get_mojang_profile")
 def test_handle_addgameaccount_minecraft_not_found(mock_mojang):
     mock_mojang.return_value = (None, None)
 
@@ -63,8 +63,8 @@ def test_handle_addgameaccount_minecraft_not_found(mock_mojang):
     assert "existiert nicht bei Mojang" in body["error"]
 
 
-@patch("personal_server_hub.services.mojang.get_mojang_profile")
-@patch("personal_server_hub.services.supabase.supabase_client_request")
+@patch("personal_server_hub.integrations.mojang.get_mojang_profile")
+@patch("personal_server_hub.integrations.supabase.supabase_client_request")
 def test_handle_addgameaccount_stops_when_user_registration_fails(mock_sb, mock_mojang):
     mock_mojang.return_value = ("069a79f4-44e9-4726-a5be-fca90e38aaf5", "Notch")
     mock_sb.side_effect = [

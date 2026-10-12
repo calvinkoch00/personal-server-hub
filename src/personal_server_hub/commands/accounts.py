@@ -3,7 +3,7 @@ from personal_server_hub.application.billing import get_account_balance, add_cas
 from personal_server_hub.application.whitelist import add_whitelist, remove_whitelist, list_whitelist
 from personal_server_hub.application.game_accounts import add_game_account
 from personal_server_hub.commands.finance import resolve_discord_user_id
-from personal_server_hub.services.supabase import supabase_client_request
+from personal_server_hub.integrations.supabase import supabase_client_request
 
 def handle_account(data: dict, caller_id: str) -> str:
     options = {opt["name"]: opt.get("value") for opt in data.get("options", [])}
