@@ -3,13 +3,16 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from fastapi.testclient import TestClient
+from personal_server_hub.api.main import app
+from personal_server_hub.api.dependencies import internal_headers
 from personal_server_hub.adapters.discord.slash_commands import slash_command_response
 from personal_server_hub.application.help import get_help_message
-from personal_server_hub.commands import server
-from personal_server_hub.commands import accounts, finance
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 DISCORD_MESSAGE_CONTENT_LIMIT = 2000
+
+client = TestClient(app)
 
 
 def handle_interaction(body: dict, context=None) -> dict:
@@ -82,44 +85,81 @@ def handle_interaction(body: dict, context=None) -> dict:
         subcommand = options_list[0].get("name")
         sub_options = {o["name"]: o.get("value") for o in options_list[0].get("options", [])}
 
-    response_data = None
+    headers = internal_headers(caller_id)
+    response_content = ""
 
     if command == "help":
-        response_data = {"content": get_help_message()}
+        response_content = get_help_message()
     elif command == "status":
-        response_data = {"content": server.handle_status()}
+        res = client.get("/servers", headers=headers)
+        resp = res.json()
+        servers = resp.get("servers", resp.get("data", []))
+        if not servers:
+            response_content = "⚪ Keine registrierten Server vorhanden."
+        else:
+            lines = ["🟢 **Registrierte Server:**"]
+            for s in servers:
+                name = s.get("display_name", s.get("name"))
+                st = s.get("status", "unknown")
+                ip = s.get("ip") or "offline"
+                lines.append(f"• **{name}** (`{st}`) — IP: `{ip}`")
+            response_content = "\n".join(lines)
     elif command == "server":
         if subcommand == "start":
-            response_data = {"content": server.handle_start({"options": [{"name": k, "value": v} for k, v in sub_options.items()]})}
+            res = client.post("/start", json=sub_options, headers=headers)
+            resp = res.json()
+            response_content = resp.get("message") or resp.get("status") or str(resp)
         elif subcommand == "stop":
-            response_data = {"content": server.handle_stop({"name": sub_options.get("name")})}
+            res = client.post("/stop", json=sub_options, headers=headers)
+            resp = res.json()
+            response_content = resp.get("message") or resp.get("status") or str(resp)
         elif subcommand == "reload-files":
-            response_data = {"content": server.handle_reload_files(sub_options)}
+            res = client.post("/server/reload-files", json=sub_options, headers=headers)
+            resp = res.json()
+            response_content = resp.get("message") or resp.get("status") or str(resp)
         elif subcommand == "status":
-            response_data = {"content": server.handle_status()}
+            res = client.get("/servers", headers=headers)
+            resp = res.json()
+            response_content = str(resp)
         elif subcommand == "create":
-            response_data = {"content": server.handle_create({"options": [{"name": k, "value": v} for k, v in sub_options.items()]}, caller_id)}
+            res = client.post("/server/create", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
+            resp = res.json()
+            response_content = resp.get("message") or resp.get("status") or str(resp)
         elif subcommand == "delete":
-            del_result = server.handle_delete(sub_options, caller_id)
-            response_data = del_result if isinstance(del_result, dict) else {"content": str(del_result)}
+            res = client.post("/server/delete", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
+            resp = res.json()
+            response_content = resp.get("message") or resp.get("status") or str(resp)
         else:
-            response_data = {"content": "Unbekannter Server-Befehl."}
+            response_content = "Unbekannter Server-Befehl."
     elif command == "whitelist":
-        response_data = {"content": accounts.handle_whitelist(subcommand, sub_options, caller_id)}
+        res = client.post(f"/whitelist/{subcommand}", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
+        resp = res.json()
+        response_content = str(resp.get("status") or resp.get("entries") or resp)
     elif command == "log":
-        response_data = {"content": server.handle_log(data)}
+        res = client.post("/log", json=data, headers=headers)
+        resp = res.json()
+        response_content = str(resp.get("status") or resp)
     elif command == "costs":
-        response_data = {"content": finance.handle_costs(data, caller_id)}
+        res = client.post("/costs", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
+        resp = res.json()
+        response_content = str(resp.get("rows") or resp)
     elif command == "account":
-        response_data = {"content": accounts.handle_account(data, caller_id)}
+        res = client.post("/account", json={"user": sub_options.get("user", "me"), "target_uid": caller_id}, headers=headers)
+        resp = res.json()
+        response_content = str(resp)
     elif command == "cash":
-        response_data = {"content": accounts.handle_cash(data, caller_id, caller_name)}
+        res = client.post("/cash", json={**sub_options, "created_by": caller_name}, headers=headers)
+        resp = res.json()
+        response_content = str(resp.get("payment") or resp)
     elif command == "addgameaccount":
-        response_data = {"content": accounts.handle_addgameaccount(data, caller_id, caller_data)}
+        game_options = {o["name"]: o.get("value") for o in data.get("options", [])}
+        res = client.post("/game-accounts", json={**game_options, "discord_user_id": caller_id, "discord_username": caller_data.get("username")}, headers=headers)
+        resp = res.json()
+        response_content = resp.get("message") or resp.get("status") or str(resp)
     else:
-        response_data = {"content": f"Unbekannter Befehl: `/{command}`"}
+        response_content = f"Unbekannter Befehl: `/{command}`"
 
-    return slash_command_response(response_data)
+    return slash_command_response({"content": response_content})
 
 
 def split_discord_content(content: str) -> list[str]:

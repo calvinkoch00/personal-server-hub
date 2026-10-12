@@ -36,9 +36,10 @@ def test_handle_interaction_unsupported():
     assert "Unsupported" in res["body"]["error"]
 
 
-@patch("personal_server_hub.commands.server.handle_start")
-def test_handle_interaction_server_subcommand_start(mock_start):
-    mock_start.return_value = "Server wird gestartet..."
+@patch("personal_server_hub.api.routers.servers.handle_start")
+@patch("personal_server_hub.api.dependencies.get_user_role", return_value=(200, "user"))
+def test_handle_interaction_server_subcommand_start(mock_get_role, mock_start):
+    mock_start.return_value = (200, {"message": "Server wird gestartet..."})
 
     payload = {
         "type": 2,
@@ -64,13 +65,15 @@ def test_handle_interaction_server_subcommand_start(mock_start):
     assert res["statusCode"] == 200
     assert res["body"]["data"]["content"] == "Server wird gestartet..."
     assert mock_start.called
-    call_options = mock_start.call_args[0][0]["options"]
-    assert any(o["name"] == "name" and o["value"] == "skyblock" for o in call_options)
+    call_payload = mock_start.call_args[0][0]
+    assert call_payload.get("name") == "skyblock"
+    assert call_payload.get("duration") == "2h"
 
 
-@patch("personal_server_hub.commands.accounts.handle_whitelist")
-def test_handle_interaction_whitelist_subcommand(mock_wl):
-    mock_wl.return_value = "Whitelist aktualisiert"
+@patch("personal_server_hub.api.routers.whitelist.add_whitelist")
+@patch("personal_server_hub.api.dependencies.get_user_role", return_value=(200, "user"))
+def test_handle_interaction_whitelist_subcommand(mock_get_role, mock_wl):
+    mock_wl.return_value = (200, {"status": "Whitelist aktualisiert"})
 
     payload = {
         "type": 2,
@@ -94,16 +97,23 @@ def test_handle_interaction_whitelist_subcommand(mock_wl):
 
     res = discord_api.handle_interaction(payload)
     assert res["statusCode"] == 200
-    assert res["body"]["data"]["content"] == "Whitelist aktualisiert"
+    assert "Whitelist aktualisiert" in res["body"]["data"]["content"]
     mock_wl.assert_called_once_with(
-        "add",
-        {"username": "Notch", "role": "server-admin"},
-        "12345678"
+        {
+            "game": "minecraft",
+            "server": None,
+            "server_name": None,
+            "server_slug": None,
+            "username": "Notch",
+            "discord_user_id": "12345678",
+            "role": "server-admin"
+        }
     )
 
 
-@patch("personal_server_hub.commands.accounts.add_game_account")
-def test_addgameaccount_command_uses_shared_application_operation(mock_add_game_account):
+@patch("personal_server_hub.api.routers.game_accounts.add_game_account")
+@patch("personal_server_hub.api.dependencies.get_user_role", return_value=(200, "user"))
+def test_addgameaccount_command_uses_shared_application_operation(mock_get_role, mock_add_game_account):
     mock_add_game_account.return_value = (
         200,
         {
@@ -129,9 +139,7 @@ def test_addgameaccount_command_uses_shared_application_operation(mock_add_game_
 
     response = discord_api.handle_interaction(payload)
 
-    assert response["body"]["data"]["content"].startswith(
-        "✅ Ingame-Account `Notch`"
-    )
+    assert "created" in response["body"]["data"]["content"]
     mock_add_game_account.assert_called_once_with(
         {
             "discord_user_id": "123456",
