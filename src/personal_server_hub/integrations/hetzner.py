@@ -3,12 +3,12 @@ import json
 import urllib.request
 import urllib.error
 from personal_server_hub.config import HETZNER_API_TOKEN, get_stage1_bootloader, get_game_config
-from personal_server_hub.services.dns import (
+from personal_server_hub.application.dns import (
     environment_subdomain,
     fallback_server_subdomain,
     update_godaddy_dns,
 )
-from personal_server_hub.services.supabase import log_server_start_to_supabase, supabase_client_request
+from personal_server_hub.integrations.supabase import log_server_start_to_supabase, supabase_client_request
 
 BASE_URL = "https://api.hetzner.cloud/v1"
 

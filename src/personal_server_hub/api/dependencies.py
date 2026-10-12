@@ -20,7 +20,7 @@ from typing import Literal
 from fastapi import Depends, HTTPException, Request
 
 from personal_server_hub.application.users import get_user_role
-from personal_server_hub.services.auth import is_authorized
+from personal_server_hub.security import is_authorized
 
 INTERNAL_TOKEN = secrets.token_urlsafe(32)
 INTERNAL_TOKEN_HEADER = "x-internal-token"

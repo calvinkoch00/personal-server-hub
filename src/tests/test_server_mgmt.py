@@ -1,6 +1,6 @@
 import json
 from unittest.mock import patch, MagicMock
-from personal_server_hub.services import hetzner
+from personal_server_hub.integrations import hetzner
 from personal_server_hub.application.dns import fallback_server_subdomain
 from personal_server_hub.application.servers import handle_server_create, handle_stop
 
