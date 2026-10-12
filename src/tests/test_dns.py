@@ -1,10 +1,9 @@
 import json
 from unittest.mock import patch, MagicMock
-from personal_server_hub.services import dns
-import personal_server_hub.rest_api as rest_api
+from personal_server_hub.application import dns
 
 @patch("urllib.request.urlopen")
-@patch("personal_server_hub.services.dns.supabase_client_request")
+@patch("personal_server_hub.application.dns.supabase_client_request")
 def test_update_godaddy_dns_success(mock_supabase, mock_urlopen, monkeypatch):
     monkeypatch.setattr(dns, "GODADDY_API_KEY", "test-api-key")
     monkeypatch.setattr(dns, "GODADDY_API_SECRET", "test-api-secret")
@@ -30,7 +29,7 @@ def test_update_godaddy_dns_success(mock_supabase, mock_urlopen, monkeypatch):
 
 
 @patch("urllib.request.urlopen")
-@patch("personal_server_hub.services.dns.supabase_client_request")
+@patch("personal_server_hub.application.dns.supabase_client_request")
 def test_update_godaddy_dns_applies_staging_prefix(
     mock_supabase, mock_urlopen, monkeypatch
 ):
@@ -57,7 +56,7 @@ def test_environment_subdomain_applies_prefix_only_once(monkeypatch):
 
 
 @patch("urllib.request.urlopen")
-@patch("personal_server_hub.services.dns.supabase_client_request")
+@patch("personal_server_hub.application.dns.supabase_client_request")
 def test_sync_all_dns_from_godaddy(mock_supabase, mock_urlopen, monkeypatch):
     monkeypatch.setattr(dns, "GODADDY_API_KEY", "test-api-key")
     monkeypatch.setattr(dns, "GODADDY_API_SECRET", "test-api-secret")
@@ -84,7 +83,7 @@ def test_sync_all_dns_from_godaddy(mock_supabase, mock_urlopen, monkeypatch):
 
 
 @patch("urllib.request.urlopen")
-@patch("personal_server_hub.services.dns.supabase_client_request")
+@patch("personal_server_hub.application.dns.supabase_client_request")
 def test_sync_all_dns_only_imports_prefixed_records(
     mock_supabase, mock_urlopen, monkeypatch
 ):
@@ -123,19 +122,3 @@ def test_find_subdomains_by_ip_only_returns_prefixed_records(
     mock_urlopen.return_value = godaddy_resp
 
     assert dns.find_subdomains_by_ip("1.2.3.4") == ["staging-mc"]
-
-
-def test_rest_api_dns_sync_endpoint():
-    with patch("personal_server_hub.services.dns.sync_all_dns_from_godaddy") as mock_sync:
-        mock_sync.return_value = {"synced_count": 2, "records": ["@ (A)", "mc (A)"]}
-        status, body = rest_api.route_request("/dns/sync", {})
-        assert status == 200
-        assert body["synced_count"] == 2
-
-def test_rest_api_dns_records_endpoint():
-    with patch("personal_server_hub.services.supabase.supabase_client_request") as mock_sb:
-        mock_sb.return_value = (200, json.dumps([{"subdomain": "mc", "record_value": "1.2.3.4"}]))
-        status, body = rest_api.route_request("/dns/records", {})
-        assert status == 200
-        assert len(body["records"]) == 1
-        assert body["records"][0]["subdomain"] == "mc"

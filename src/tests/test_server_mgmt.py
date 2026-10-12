@@ -97,7 +97,7 @@ def test_create_server_uses_game_default_when_no_dns_record(
     )
 
 
-@patch("personal_server_hub.services.dns.update_godaddy_dns")
+@patch("personal_server_hub.application.dns.update_godaddy_dns")
 @patch("personal_server_hub.services.hetzner.create_volume")
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 def test_handle_server_create(mock_sb, mock_vol, mock_dns):
@@ -137,8 +137,8 @@ def test_handle_server_create_invalid_name(mock_sb):
     assert status == 400
     assert "nur Kleinbuchstaben" in body["error"]
 
-@patch("personal_server_hub.services.dns.find_subdomains_by_ip")
-@patch("personal_server_hub.services.dns.update_godaddy_dns")
+@patch("personal_server_hub.application.dns.find_subdomains_by_ip")
+@patch("personal_server_hub.application.dns.update_godaddy_dns")
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 @patch("personal_server_hub.services.agent.stop_remote_server")
 @patch("personal_server_hub.services.hetzner.list_servers")
@@ -162,8 +162,8 @@ def test_handle_stop_with_dns_reset(mock_list, mock_agent, mock_sb, mock_dns, mo
     mock_dns.assert_called_with("0.0.0.0", subdomain="sky", server_id="srv-sky")
 
 
-@patch("personal_server_hub.services.dns.find_subdomains_by_ip", return_value=[])
-@patch("personal_server_hub.services.dns.update_godaddy_dns")
+@patch("personal_server_hub.application.dns.find_subdomains_by_ip", return_value=[])
+@patch("personal_server_hub.application.dns.update_godaddy_dns")
 @patch("personal_server_hub.services.supabase.supabase_client_request")
 @patch("personal_server_hub.services.agent.stop_remote_server", return_value={"status": "stopping"})
 @patch("personal_server_hub.services.hetzner.list_servers")

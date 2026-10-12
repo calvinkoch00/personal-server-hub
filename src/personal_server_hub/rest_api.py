@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from personal_server_hub.services import supabase
 from personal_server_hub.services import agent, dns, fx, hetzner, mojang
+from personal_server_hub.application.dns import list_dns_records, sync_dns_records
 from personal_server_hub.application.game_accounts import add_game_account
 
 def resolve_server_slug(raw_name: str | None, game: str = "minecraft") -> str:
@@ -448,16 +449,10 @@ def handle_addgameaccount(payload: dict) -> tuple[int, dict]:
     return add_game_account(payload)
 
 def handle_dns_sync(payload: dict) -> tuple[int, dict]:
-    res = dns.sync_all_dns_from_godaddy()
-    if "error" in res:
-        return 500, res
-    return 200, res
+    return sync_dns_records()
 
 def handle_dns_records(payload: dict) -> tuple[int, dict]:
-    status, resp = supabase.supabase_client_request("dim_dns_records?order=subdomain.asc", method="GET")
-    if status == 200:
-        return 200, {"records": json.loads(resp)}
-    return status, {"error": f"Fehler beim Laden der DNS-Records: {resp}"}
+    return list_dns_records()
 
 def handle_whitelist_add(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()

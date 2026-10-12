@@ -1,0 +1,213 @@
+# TODO(refactor): This module still mixes application rules with the raw GoDaddy HTTP
+# client. To finish the migration, move the GoDaddy calls to integrations/godaddy.py and
+# the Supabase mirroring behind integration methods. services/dns.py only redirects here
+# and can be deleted once all callers import personal_server_hub.application.dns.
+import os
+import json
+import urllib.request
+from datetime import datetime, timezone
+from personal_server_hub.services.supabase import supabase_client_request
+
+GODADDY_API_KEY = os.environ.get("GODADDY_API_KEY")
+GODADDY_API_SECRET = os.environ.get("GODADDY_API_SECRET")
+GODADDY_DOMAIN = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
+DNS_SUBDOMAIN_PREFIX = os.environ.get("DNS_SUBDOMAIN_PREFIX", "").strip().lower()
+
+
+def environment_subdomain(subdomain: str) -> str:
+    normalized_subdomain = subdomain.strip().lower()
+    if DNS_SUBDOMAIN_PREFIX and not normalized_subdomain.startswith(DNS_SUBDOMAIN_PREFIX):
+        return f"{DNS_SUBDOMAIN_PREFIX}{normalized_subdomain}"
+    return normalized_subdomain
+
+
+def fallback_server_subdomain(game: str, server_slug: str) -> str:
+    normalized_game = game.strip().lower()
+    normalized_slug = server_slug.strip().lower()
+    if normalized_slug in {"default", f"{normalized_game}-default"}:
+        return environment_subdomain(f"{normalized_game}-default")
+    return environment_subdomain(normalized_slug)
+
+
+def _get_headers() -> dict:
+    return {
+        "Authorization": f"sso-key {GODADDY_API_KEY}:{GODADDY_API_SECRET}",
+        "Content-Type": "application/json"
+    }
+
+
+def update_godaddy_dns(ip: str, subdomain: str, server_id: str | None = None) -> bool:
+    """Aktualisiert exakt eine Subdomain bei GoDaddy und katalogisiert sie in Supabase."""
+    if not GODADDY_API_KEY or not GODADDY_API_SECRET:
+        print("[DNS ERROR] GoDaddy API Keys fehlen in Umgebungsvariablen.")
+        return False
+
+    target_sub = environment_subdomain(subdomain)
+    domain = GODADDY_DOMAIN
+
+    url = f"https://api.godaddy.com/v1/domains/{domain}/records/A/{target_sub}"
+    payload = [{"data": ip, "ttl": 600}]
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_get_headers(),
+        method="PUT"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            if resp.status in [200, 204]:
+                print(f"[DNS] GoDaddy Record {target_sub}.{domain} -> {ip} aktualisiert ({resp.status})")
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+                dns_entry = {
+                    "domain": domain,
+                    "subdomain": target_sub,
+                    "record_type": "A",
+                    "record_value": ip,
+                    "ttl": 600,
+                    "used_for": "game-server",
+                    "last_synced_with_godaddy": now_iso
+                }
+                if server_id:
+                    dns_entry["server_id"] = server_id
+
+                supabase_client_request(
+                    "dim_dns_records",
+                    method="POST",
+                    data=dns_entry,
+                    headers_extra={"Prefer": "resolution=merge-duplicates"}
+                )
+                return True
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8") if e.fp else ""
+        print(f"[DNS ERROR] GoDaddy Update fehlgeschlagen ({e.code}): {err_msg}")
+        return False
+    except Exception as e:
+        print(f"[DNS ERROR] Unerwarteter Fehler bei DNS-Aktualisierung: {e}")
+        return False
+
+    return False
+
+def delete_godaddy_dns(subdomain: str) -> bool:
+    """Löscht einen A-Record bei GoDaddy und entfernt ihn aus dim_dns_records."""
+    if not GODADDY_API_KEY or not GODADDY_API_SECRET:
+        return False
+
+    sub = environment_subdomain(subdomain)
+    url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records/A/{sub}"
+    req = urllib.request.Request(url, headers=_get_headers(), method="DELETE")
+
+    try:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            print(f"[DNS] GoDaddy Record {sub}.{GODADDY_DOMAIN} gelöscht ({resp.status})")
+    except Exception as e:
+        print(f"[DNS] Fehler beim Löschen bei GoDaddy: {e}")
+        return False
+
+    supabase_client_request(
+        f"dim_dns_records?domain=eq.{GODADDY_DOMAIN}&subdomain=eq.{sub}&record_type=eq.A",
+        method="DELETE"
+    )
+    return True
+
+
+def find_subdomains_by_ip(target_ip: str) -> list[str]:
+    """Sucht direkt bei GoDaddy nach Subdomains, deren A-Record auf target_ip zeigt."""
+    if not target_ip or target_ip in ["0.0.0.0", "127.0.0.1"]:
+        return []
+
+    headers = _get_headers()
+    url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records/A"
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            records = json.loads(resp.read().decode("utf-8"))
+            matched = []
+            for r in records:
+                if str(r.get("data", "")).strip() == str(target_ip).strip():
+                    name = r.get("name")
+                    if (
+                        name
+                        and name != "@"
+                        and (
+                            not DNS_SUBDOMAIN_PREFIX
+                            or name.lower().startswith(DNS_SUBDOMAIN_PREFIX)
+                        )
+                    ):
+                        matched.append(name)
+            return matched
+    except Exception as e:
+        print(f"[DNS LOOKUP ERROR] Konnte GoDaddy Records nicht prüfen: {e}")
+        return []
+
+
+def sync_all_dns_from_godaddy() -> dict:
+    """Holt alle Records von GoDaddy und speichert sie gespiegelt in dim_dns_records."""
+    if not GODADDY_API_KEY or not GODADDY_API_SECRET:
+        return {"error": "GoDaddy API Keys fehlen"}
+
+    url = f"https://api.godaddy.com/v1/domains/{GODADDY_DOMAIN}/records"
+    req = urllib.request.Request(url, headers=_get_headers(), method="GET")
+
+    try:
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            remote_records = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"error": f"GoDaddy Abruf fehlgeschlagen: {e}"}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    synced = []
+
+    for rec in remote_records:
+        r_type = rec.get("type", "").upper()
+        if r_type not in ["A", "AAAA", "CNAME", "TXT", "MX"]:
+            continue
+
+        sub = rec.get("name", "").lower()
+        if DNS_SUBDOMAIN_PREFIX and not sub.startswith(DNS_SUBDOMAIN_PREFIX):
+            continue
+        used_for = "game-server" if sub in ["mc", "minecraft"] or "server" in sub else "other"
+        if sub in ["@", "www"]:
+            used_for = "website"
+
+        supabase_client_request(
+            "dim_dns_records",
+            method="POST",
+            data={
+                "domain": GODADDY_DOMAIN,
+                "subdomain": sub,
+                "record_type": r_type,
+                "record_value": rec.get("data", ""),
+                "ttl": int(rec.get("ttl", 600)),
+                "used_for": used_for,
+                "last_synced_with_godaddy": now_iso
+            },
+            headers_extra={"Prefer": "resolution=merge-duplicates"}
+        )
+        synced.append(f"{sub} ({r_type})")
+
+    return {
+        "domain": GODADDY_DOMAIN,
+        "synced_count": len(synced),
+        "records": synced
+    }
+
+
+def sync_dns_records() -> tuple[int, dict]:
+    result = sync_all_dns_from_godaddy()
+    if "error" in result:
+        return 500, result
+    return 200, result
+
+
+def list_dns_records() -> tuple[int, dict]:
+    status, response = supabase_client_request(
+        "dim_dns_records?order=subdomain.asc",
+        method="GET",
+    )
+    if status == 200:
+        return 200, {"records": json.loads(response)}
+    return status, {"error": f"Fehler beim Laden der DNS-Records: {response}"}
+

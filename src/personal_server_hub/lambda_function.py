@@ -110,6 +110,8 @@ def lambda_handler(event, context):
     normalized_path = raw_path.rstrip("/")
     if (
         (normalized_path == "/help" and http_method == "GET")
+        or (normalized_path == "/dns/records" and http_method == "GET")
+        or (normalized_path == "/dns/sync" and http_method == "POST")
         or (normalized_path == "/game-accounts" and http_method == "POST")
         or (normalized_path == "/users/register" and http_method == "POST")
         or (
