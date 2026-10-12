@@ -7,25 +7,13 @@ from fastapi.testclient import TestClient
 from personal_server_hub.api.main import app
 from personal_server_hub.api.dependencies import internal_headers
 from personal_server_hub.adapters.discord.slash_commands import slash_command_response
+from personal_server_hub.adapters.discord.formatter import format_server_list, format_message
 from personal_server_hub.application.help import get_help_message
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 DISCORD_MESSAGE_CONTENT_LIMIT = 2000
 
 client = TestClient(app)
-
-
-def format_server_list(resp: dict) -> str:
-    servers = resp.get("servers", resp.get("data", []))
-    if not servers:
-        return "⚪ Keine registrierten Server vorhanden."
-    lines = ["🟢 **Registrierte Server:**"]
-    for s in servers:
-        name = s.get("display_name", s.get("name"))
-        st = s.get("status", "unknown")
-        ip = s.get("ip") or "offline"
-        lines.append(f"• **{name}** (`{st}`) — IP: `{ip}`")
-    return "\n".join(lines)
 
 
 def handle_interaction(body: dict, context=None) -> dict:
@@ -133,7 +121,7 @@ def handle_interaction(body: dict, context=None) -> dict:
             resp = res.json()
             response_content = resp.get("message") or resp.get("status") or str(resp)
         else:
-            response_content = "Unbekannter Server-Befehl."
+            response_content = format_message("server_unknown", "Unbekannter Server-Befehl.")
     elif command == "whitelist":
         res = client.post(f"/whitelist/{subcommand}", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
         resp = res.json()
@@ -160,7 +148,7 @@ def handle_interaction(body: dict, context=None) -> dict:
         resp = res.json()
         response_content = resp.get("message") or resp.get("status") or str(resp)
     else:
-        response_content = f"Unbekannter Befehl: `/{command}`"
+        response_content = format_message("unknown_command", f"Unbekannter Befehl: `/{command}`", command=command)
 
     return slash_command_response({"content": response_content})
 

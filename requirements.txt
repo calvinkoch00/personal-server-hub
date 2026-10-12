@@ -1,6 +1,9 @@
 # HTTP & Webhooks
 requests>=2.31.0
 
+# YAML Support for Discord Response Formatting
+PyYAML>=6.0
+
 # Umgebungsvariablen
 python-dotenv>=1.0.0
 

@@ -1,0 +1,24 @@
+# Discord Response Translation and Formatting Config
+
+status_templates:
+  server_list_header: "🟢 **Registrierte Server:**"
+  server_list_empty: "⚪ Keine registrierten Server vorhanden."
+  server_item: "• **{name}** (`{status}`) — IP: `{ip}`"
+
+status_codes:
+  200: "✅"
+  201: "✨"
+  400: "⚠️ Ungültige Anfrage"
+  401: "🔒 Nicht autorisiert"
+  403: "⛔ Keine Berechtigung"
+  404: "🔍 Nicht gefunden"
+  500: "❌ Interner Serverfehler"
+
+command_messages:
+  unknown_command: "Unbekannter Befehl: `/{command}`"
+  server_unknown: "Unbekannter Server-Befehl."
+  async_received: "✅ Befehl empfangen – ich versuche ihn auszuführen…"
+  async_error: "❌ Der Befehl konnte nicht ausgeführt werden. Bitte prüfe die Server-Logs."
+  delete_cancelled: "❌ Löschvorgang abgebrochen. Es wurden keine Daten gelöscht."
+  delete_unauthorized: "⛔ Nur der Ersteller des Befehls kann abbrechen."
+  delete_not_allowed: "⛔ Du bist nicht berechtigt, diese Aktion zu bestätigen."
