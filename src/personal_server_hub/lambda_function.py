@@ -118,6 +118,9 @@ def lambda_handler(event, context):
         or (normalized_path == "/costs" and http_method == "POST")
         or (normalized_path == "/account" and http_method == "POST")
         or (normalized_path == "/cash" and http_method == "POST")
+        or (normalized_path == "/whitelist/add" and http_method == "POST")
+        or (normalized_path == "/whitelist/remove" and http_method == "POST")
+        or (normalized_path == "/whitelist/list" and http_method == "POST")
         or (
             normalized_path.startswith("/users/")
             and normalized_path.count("/") == 2
