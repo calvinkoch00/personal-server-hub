@@ -16,18 +16,18 @@ Alle REST-Endpunkte aus dem alten `src/personal_server_hub/rest_api.py` wandern 
 | Bereich | Status |
 | --- | --- |
 | `GET /help`, `GET /users/{discord_user_id}`, `POST /game-accounts`, `POST /users/register` | Migriert |
-| `GET /dns/records`, `POST /dns/sync` | Migriert (`application/dns.py`; `services/dns.py` ist nur noch Weiterleitung) |
-| Auth-Abhängigkeit (`api/dependencies.py`) | Fertig, global an der App; `require_registered`/`require_admin` noch an keiner Route aktiv |
-| Billing (`exchange-rate`, `costs`, `account`, `cash`) | **Nächster Batch**, Admin-Routen mit `require_admin` |
-| Whitelist | Offen |
-| Server lesen/konfigurieren (`servers`, `log`, `reload-files`) | Offen |
-| Server-Lifecycle (`create`, `delete`, `start`, `stop`) | Offen |
-| Discord-Adapter ruft die App in-process auf (mit `internal_headers`) | Offen; nichts im Discord-Code sendet die internen Header. `lambda_function.py` prüft `AUTH_SECRET` noch vor der Weiterleitung an FastAPI; der In-process-Pfad muss dies nach der Signaturprüfung umgehen |
+| `GET /dns/records`, `POST /dns/sync` | Migriert (`application/dns.py`) |
+| Auth-Abhängigkeit (`api/dependencies.py`) & Security (`security.py`) | Fertig, global an der App; `require_registered`/`require_admin` aktiv |
+| Billing (`exchange-rate`, `costs`, `account`, `cash`) | Migriert & Getestet |
+| Whitelist | Migriert & Getestet |
+| Server lesen/konfigurieren (`servers`, `log`, `reload-files`) | Migriert & Getestet |
+| Server-Lifecycle (`create`, `delete`, `start`, `stop`) | Migriert & Getestet |
+| Discord-Adapter ruft die App in-process auf (mit `internal_headers`) | Migriert & Getestet |
 | FEAT-008 (Interaction-Dedupe) | Dokumentiert, nicht umgesetzt. Entscheidung: Cooldown wird ignoriert und nicht gespeichert |
-| Aufräumen: Allowlist, `route_request`, `rest_api.py`, Alias `handle_addgameaccount` entfernen | Zuletzt; vorher die drei Tests in `test_mojang.py` umziehen |
-| Später: GoDaddy-HTTP nach `integrations/godaddy.py`, `hetzner.py`/`rest_api.py` auf `application.dns`, `services/dns.py` löschen | Offen |
+| Aufräumen: Allowlist, `route_request`, `rest_api.py`, `services/`, `commands/` entfernt | Erledigt |
+| GoDaddy-HTTP Integration / DNS cleanup | Erledigt |
 
-Reihenfolge: Billing → Whitelist → Server lesen/konfigurieren → Lifecycle → Discord-Adapter (je Befehlsgruppe) → FEAT-008 → Aufräumen.
+Reihenfolge: Abgeschlossen. Alle Kernbereiche, Services, Whitelist, Billing, Server-Lifecycle und Discord In-Process Adapter sind vollständig migriert und getestet.
 
 ### Authentifizierungsmodell (`api/dependencies.py`)
 
