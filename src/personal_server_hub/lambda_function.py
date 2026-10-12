@@ -121,6 +121,13 @@ def lambda_handler(event, context):
         or (normalized_path == "/whitelist/add" and http_method == "POST")
         or (normalized_path == "/whitelist/remove" and http_method == "POST")
         or (normalized_path == "/whitelist/list" and http_method == "POST")
+        or (normalized_path == "/server/start" and http_method == "POST")
+        or (normalized_path == "/start" and http_method == "POST")
+        or (normalized_path == "/server/stop" and http_method == "POST")
+        or (normalized_path == "/stop" and http_method == "POST")
+        or (normalized_path == "/server/create" and http_method == "POST")
+        or (normalized_path == "/server/delete" and http_method == "POST")
+        or (normalized_path == "/servers" and http_method == "GET")
         or (
             normalized_path.startswith("/users/")
             and normalized_path.count("/") == 2

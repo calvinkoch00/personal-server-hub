@@ -64,8 +64,20 @@ def test_list_servers_endpoint(mock_sb, auth_headers):
     )
 
     event = {
+        "version": "2.0",
         "rawPath": "/servers",
+        "rawQueryString": "",
         "headers": auth_headers,
+        "requestContext": {
+            "http": {
+                "method": "GET",
+                "path": "/servers",
+                "protocol": "HTTP/1.1",
+                "sourceIp": "127.0.0.1",
+                "userAgent": "pytest",
+            }
+        },
+        "isBase64Encoded": False,
         "body": None
     }
     response = lambda_handler(event, None)
