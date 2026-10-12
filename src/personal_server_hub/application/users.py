@@ -33,6 +33,31 @@ def register_user(payload: dict) -> tuple[int, dict]:
         "discord_username": discord_username,
     }
 
+def get_user_role(discord_user_id: str) -> tuple[int, str | None]:
+    """Return (status, role). Role is None if the user is not registered."""
+    discord_user_id = str(discord_user_id or "").strip()
+    if not discord_user_id:
+        return 200, None
+
+    status, response = supabase.supabase_client_request(
+        f"dim_users?discord_user_id=eq.{discord_user_id}&select=role",
+        method="GET",
+    )
+    if status != 200:
+        return status, None
+
+    try:
+        users = json.loads(response)
+    except json.JSONDecodeError:
+        return 502, None
+    if not isinstance(users, list) or (users and not isinstance(users[0], dict)):
+        return 502, None
+    if not users:
+        return 200, None
+
+    return 200, users[0].get("role") or "user"
+
+
 def get_user(discord_user_id: str) -> tuple[int, dict]:
     discord_user_id = str(discord_user_id or "").strip()
     if not discord_user_id:
