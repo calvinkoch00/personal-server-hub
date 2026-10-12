@@ -114,6 +114,10 @@ def lambda_handler(event, context):
         or (normalized_path == "/dns/sync" and http_method == "POST")
         or (normalized_path == "/game-accounts" and http_method == "POST")
         or (normalized_path == "/users/register" and http_method == "POST")
+        or (normalized_path == "/exchange-rate" and http_method == "POST")
+        or (normalized_path == "/costs" and http_method == "POST")
+        or (normalized_path == "/account" and http_method == "POST")
+        or (normalized_path == "/cash" and http_method == "POST")
         or (
             normalized_path.startswith("/users/")
             and normalized_path.count("/") == 2
