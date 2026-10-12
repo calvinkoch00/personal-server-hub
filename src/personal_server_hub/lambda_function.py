@@ -103,7 +103,18 @@ def lambda_handler(event, context):
             return json_response(500, {"error": str(e)})
 
     # 2. REST API Entrypoint
-    if not is_authorized(headers):
+    from personal_server_hub.api.dependencies import INTERNAL_TOKEN, INTERNAL_TOKEN_HEADER, DISCORD_USER_HEADER
+    import hmac
+
+    internal_token = norm_headers.get(INTERNAL_TOKEN_HEADER, "")
+    discord_uid = norm_headers.get(DISCORD_USER_HEADER, "").strip()
+    is_internal_discord_call = bool(
+        discord_uid
+        and internal_token
+        and hmac.compare_digest(internal_token, INTERNAL_TOKEN)
+    )
+
+    if not is_internal_discord_call and not is_authorized(headers):
         return json_response(401, {"error": "Unauthorized"})
 
     raw_path = event.get("rawPath") or event.get("path") or "/"
