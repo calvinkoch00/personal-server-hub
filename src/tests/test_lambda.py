@@ -19,8 +19,11 @@ def test_unauthorized_request():
 
 
 # 2. Server Start Test
+@patch("personal_server_hub.integrations.supabase.supabase_client_request", return_value=(200, json.dumps([])))
+@patch("personal_server_hub.integrations.hetzner.get_server_by_name", return_value=None)
+@patch("personal_server_hub.integrations.hetzner._request", return_value={"volumes": [{"id": 999, "name": "vol-minecraft-minecraft-default", "location": {"name": "nbg1"}}]})
 @patch("personal_server_hub.integrations.hetzner.create_server")
-def test_start_endpoint_success(mock_create, auth_headers):
+def test_start_endpoint_success(mock_create, mock_hetzner_req, mock_get_vm, mock_sb, auth_headers):
     mock_create.return_value = {
         "server_id": 123456,
         "name": "minecraft-default",
@@ -58,17 +61,17 @@ def test_start_endpoint_success(mock_create, auth_headers):
     assert "minecraft-default" in body.get("discord_summary", "")
     assert body["data"]["ip"] == "1.2.3.4"
 
-
 # 3. Server List Test
+@patch("personal_server_hub.integrations.hetzner.list_servers", return_value=[])
 @patch("personal_server_hub.integrations.supabase.supabase_client_request")
-def test_list_servers_endpoint(mock_sb, auth_headers):
+def test_list_servers_endpoint(mock_sb, mock_list_servers, auth_headers):
     mock_sb.return_value = (
         200,
         json.dumps([
             {
                 "server_id": "uuid-1",
                 "game": "minecraft",
-                "server_name": "default",
+                "server_slug": "default",
                 "display_name": "minecraft-default",
                 "status": "offline"
             }
@@ -98,7 +101,7 @@ def test_list_servers_endpoint(mock_sb, auth_headers):
     body = json.loads(response["body"])
     assert "servers" in body
     assert len(body["servers"]) == 1
-    assert body["servers"][0]["server_name"] == "default"
+    assert body["servers"][0]["server_slug"] == "default"
 
 
 def test_help_endpoint_is_served_by_fastapi(auth_headers):

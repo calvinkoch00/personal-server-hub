@@ -1,7 +1,7 @@
 import json
+import os
 import re
 from datetime import datetime, timezone
-
 from personal_server_hub.application import dns
 from personal_server_hub.integrations import agent, hetzner, supabase
 
@@ -13,13 +13,56 @@ def resolve_server_slug(raw_name: str | None, game: str = "minecraft") -> str:
     return cleaned
 
 
+def handle_servers() -> tuple[int, dict]:
+    """Prüft den Status aller Server, gleicht ihn live mit Hetzner ab und aktualisiert Supabase."""
+    # 1. Live-Server von Hetzner abrufen
+    hetzner_servers = hetzner.list_servers()
+
+    # 2. Alle aktiven Server aus Supabase laden
+    status_sb, resp_sb = supabase.supabase_client_request(
+        "dim_servers?status=neq.deleted&order=game.asc,server_slug.asc", method="GET"
+    )
+    db_servers = json.loads(resp_sb) if status_sb == 200 else []
+
+    # 3. Synchronisation (Reconciliation): Hetzner-Status mit Supabase abgleichen
+    synced_servers = []
+    for db_srv in db_servers:
+        slug = db_srv.get("server_slug")
+        srv_game = db_srv.get("game", "minecraft")
+        vm_full_name = db_srv.get("full_name") or f"server-{srv_game}-{slug}"
+        
+        matched_hz = next(
+            (s for s in hetzner_servers if s.get("name") == vm_full_name),
+            None
+        )
+        
+        hz_status = matched_hz.get("status") if matched_hz else "offline"
+        new_status = "online" if hz_status == "running" else ("initializing" if hz_status in ["initializing", "starting"] else "offline")
+        
+        if db_srv.get("status") != new_status:
+            supabase.supabase_client_request(
+                f"dim_servers?server_id=eq.{db_srv['server_id']}",
+                method="PATCH",
+                data={"status": new_status}
+            )
+            db_srv["status"] = new_status
+            
+        db_srv["live_hetzner"] = matched_hz
+        synced_servers.append(db_srv)
+
+    return 200, {"servers": synced_servers, "hetzner_raw": hetzner_servers}
+
+
 def handle_start(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    server_slug = resolve_server_slug(payload.get("server_name") or payload.get("name") or payload.get("server_slug"), game=game)
+    server_slug = resolve_server_slug(
+        payload.get("server_name") or payload.get("name") or payload.get("server_slug"),
+        game=game
+    )
     duration_raw = str(payload.get("duration", "5m")).strip().lower()
     server_type = payload.get("server_type")
     log_mode = str(payload.get("log", payload.get("logging", "none"))).strip().lower()
-
+    
     if log_mode in ["true", "1"]:
         log_mode = "game"
     elif log_mode in ["false", "0"]:
@@ -27,7 +70,7 @@ def handle_start(payload: dict) -> tuple[int, dict]:
 
     unit_map = {"m": 60, "h": 3600, "d": 86400}
     readable_map = {"m": "Minute(n)", "h": "Stunde(n)", "d": "Tag(e)"}
-
+    
     match = re.match(r"^(\d+)\s*([mhd])$", duration_raw)
     if match:
         val, unit = int(match.group(1)), match.group(2)
@@ -37,30 +80,114 @@ def handle_start(payload: dict) -> tuple[int, dict]:
         seconds = 300
         readable = "5 Minute(n)"
 
+    vm_name = f"server-{game}-{server_slug}"
+    domain = os.environ.get("GODADDY_DOMAIN", "calvinkoch.ch")
+    subdomain = dns.fallback_server_subdomain(game, server_slug)
+
+    def _prepare_and_start_existing_server(server_id, existing_vm, db_srv_id=None):
+        server_ip = existing_vm.get("ip")
+        status = existing_vm.get("status")
+        if status != "running":
+            hetzner.power_on_server(server_id)
+            status = "initializing"
+        if server_ip:
+            dns.update_godaddy_dns(ip=server_ip, subdomain=subdomain, server_id=db_srv_id)
+        return {
+            "server_id": server_id,
+            "name": existing_vm["name"],
+            "game": game,
+            "server_slug": server_slug,
+            "ip": server_ip or "Warte auf IP...",
+            "domain": f"{subdomain}.{domain}",
+            "lifetime_readable": readable,
+            "server_type": existing_vm.get("server_type"),
+            "status": status
+        }
+
     try:
-        result = hetzner.create_server(
-            game=game,
-            server_name=server_slug,
-            seconds=seconds,
-            readable=readable,
-            server_type=server_type,
-            enable_logging=log_mode,
+        # 1. Existiert Server in Supabase?
+        status_sb, resp_sb = supabase.supabase_client_request(
+            f"dim_servers?game=eq.{game}&server_slug=eq.{server_slug}&status=neq.deleted&select=*",
+            method="GET"
         )
+        db_servers = json.loads(resp_sb) if status_sb == 200 else []
+        db_server = db_servers[0] if db_servers else None
+
+        if db_server:
+            existing_vm = hetzner.get_server_by_name(vm_name)
+            if existing_vm:
+                result = _prepare_and_start_existing_server(
+                    server_id=existing_vm.get("server_id"),
+                    existing_vm=existing_vm,
+                    db_srv_id=db_server.get("server_id")
+                )
+            else:
+                result = hetzner.create_server(
+                    game=game,
+                    server_name=server_slug,
+                    seconds=seconds,
+                    readable=readable,
+                    server_type=server_type,
+                    enable_logging=log_mode,
+                )
+        else:
+            # 3. Wenn NEIN (Existiert nicht in Supabase) -> Prüfe bei Hetzner
+            existing_vm = hetzner.get_server_by_name(vm_name)
+            volume_name = f"vol-{game}-{server_slug}"[:32]
+            all_volumes_res = hetzner._request("volumes", method="GET")
+            matched_vol = next((v for v in all_volumes_res.get("volumes", []) if v.get("name") == volume_name), None)
+            
+            vol_exists = matched_vol is not None
+            vm_exists = existing_vm is not None
+
+            if not vol_exists and not vm_exists:
+                return 404, {"error": f"Es existiert weder ein Volume noch eine VM für den Server '{server_slug}' bei Hetzner oder Supabase."}
+
+            volume_id = matched_vol["id"] if vol_exists else None
+
+            if vol_exists and not vm_exists:
+                server_entry = {
+                    "game": game,
+                    "server_slug": server_slug,
+                    "display_name": f"{game}-{server_slug}",
+                    "hetzner_volume_id": volume_id,
+                    "hetzner_server_type": server_type or "cpx32",
+                    "hetzner_location": matched_vol.get("location", {}).get("name", "nbg1"),
+                    "status": "offline",
+                }
+                supabase.supabase_client_request("dim_servers", method="POST", data=server_entry)
+                result = hetzner.create_server(
+                    game=game,
+                    server_name=server_slug,
+                    seconds=seconds,
+                    readable=readable,
+                    server_type=server_type,
+                    enable_logging=log_mode,
+                )
+            elif vol_exists and vm_exists:
+                server_entry = {
+                    "game": game,
+                    "server_slug": server_slug,
+                    "display_name": f"{game}-{server_slug}",
+                    "hetzner_volume_id": volume_id,
+                    "hetzner_server_type": existing_vm.get("server_type"),
+                    "hetzner_location": matched_vol.get("location", {}).get("name", "nbg1"),
+                    "status": "online" if existing_vm.get("status") == "running" else "offline",
+                }
+                supabase.supabase_client_request("dim_servers", method="POST", data=server_entry)
+                result = _prepare_and_start_existing_server(
+                    server_id=existing_vm["server_id"],
+                    existing_vm=existing_vm
+                )
+
         return 200, {
             "message": "Server gestartet",
-            "discord_summary": f"🎮 `{result['name']}` gestartet! IP: `{result['ip']}` | DNS: `{result.get('domain')}` ({result['lifetime_readable']})",
+            "discord_summary": f"{result['name']} gestartet! IP: {result['ip']} | DNS: {result.get('domain')} ({result['lifetime_readable']})",
             "data": result,
             "log_mode": log_mode,
         }
     except Exception as e:
         return 500, {"error": f"Serverstart fehlgeschlagen: {str(e)}"}
-
-
-def handle_servers() -> tuple[int, dict]:
-    status, resp = supabase.supabase_client_request("dim_servers?status=neq.deleted&order=game.asc,server_slug.asc", method="GET")
-    if status == 200:
-        return 200, {"servers": json.loads(resp)}
-    return 200, {"data": hetzner.list_servers()}
 
 
 def handle_stop(payload: dict) -> tuple[int, dict]:
@@ -77,15 +204,13 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     ).strip().lower()
 
     target = None
-
     if raw_identifier:
         for s in servers:
             if str(s.get("server_id")) == raw_identifier:
                 target = s
                 break
-
         if not target:
-            raw_slug = raw_identifier.replace(" ", "_")
+            raw_slug = raw_identifier.replace("-", "_")
             for s in servers:
                 s_name = s.get("name", "").lower()
                 if (
@@ -95,7 +220,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
                 ):
                     target = s
                     break
-
         if not target:
             return 404, {"error": f"Kein laufender Server mit Namen oder ID '{raw_identifier}' gefunden."}
     else:
@@ -103,7 +227,6 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
 
     target_ip = target.get("ip")
     target_id = str(target.get("server_id"))
-
     subdomains_to_reset = set()
     srv_id = None
 
@@ -124,13 +247,11 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
     if db_servers:
         srv_row = db_servers[0]
         srv_id = srv_row.get("server_id")
-
         supabase.supabase_client_request(
             f"dim_servers?server_id=eq.{srv_id}",
             method="PATCH",
             data={"status": "offline"},
         )
-
         status_dns, resp_dns = supabase.supabase_client_request(
             f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain",
             method="GET",
@@ -191,18 +312,22 @@ def handle_stop(payload: dict) -> tuple[int, dict]:
         }
 
 
-
 def handle_server_create(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    raw_slug = resolve_server_slug(payload.get("server_name") or payload.get("name") or payload.get("server_slug"), game=game)
+    raw_slug = resolve_server_slug(
+        payload.get("server_name") or payload.get("name") or payload.get("server_slug"),
+        game=game
+    )
     caller_id = str(payload.get("discord_user_id") or "")
     server_type = payload.get("server_type", "cpx32")
     custom_subdomain = payload.get("custom_subdomain") or payload.get("subdomain")
 
     if not raw_slug or not re.match(r"^[a-z0-9_-]+$", raw_slug):
-        return 400, {"error": "Servername darf nur Kleinbuchstaben, Zahlen, - und _ enthalten"}
+        return 400, {"error": "Servername darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten."}
 
-    status_c, resp_c = supabase.supabase_client_request(f"dim_servers?server_slug=eq.{raw_slug}&status=neq.deleted", method="GET")
+    status_c, resp_c = supabase.supabase_client_request(
+        f"dim_servers?server_slug=eq.{raw_slug}&status=neq.deleted", method="GET"
+    )
     if status_c == 200 and json.loads(resp_c):
         return 400, {"error": f"Ein aktiver Server mit dem Namen '{raw_slug}' existiert bereits."}
 
@@ -230,8 +355,8 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
 
     created_server = json.loads(resp_sb)[0]
     srv_id = created_server.get("server_id")
-
     creator_accounts_added = []
+
     if caller_id and srv_id:
         status_acc, resp_acc = supabase.supabase_client_request(
             f"dim_game_accounts?discord_user_id=eq.{caller_id}&game=eq.{game}&select=id,ingame_username",
@@ -273,33 +398,40 @@ def handle_server_create(payload: dict) -> tuple[int, dict]:
 
 def handle_server_delete(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    raw_slug = resolve_server_slug(payload.get("server_name") or payload.get("name") or payload.get("server_slug"), game=game)
+    raw_slug = resolve_server_slug(
+        payload.get("server_name") or payload.get("name") or payload.get("server_slug"),
+        game=game
+    )
     caller_id = payload.get("discord_user_id")
 
     if raw_slug == f"{game}-default":
-        status_u, resp_u = supabase.supabase_client_request(f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET")
+        status_u, resp_u = supabase.supabase_client_request(
+            f"dim_users?discord_user_id=eq.{caller_id}&select=role", method="GET"
+        )
         user_role = json.loads(resp_u)[0].get("role") if status_u == 200 and json.loads(resp_u) else "user"
         if user_role != "superadmin":
             return 403, {"error": "Nur der Superadmin darf den Default-Server löschen."}
 
-    status_s, resp_s = supabase.supabase_client_request(f"dim_servers?game=eq.{game}&server_slug=eq.{raw_slug}&status=neq.deleted", method="GET")
+    status_s, resp_s = supabase.supabase_client_request(
+        f"dim_servers?game=eq.{game}&server_slug=eq.{raw_slug}&status=neq.deleted", method="GET"
+    )
     if status_s != 200 or not json.loads(resp_s):
         return 404, {"error": f"Server '{raw_slug}' nicht gefunden oder bereits gelöscht."}
 
     srv = json.loads(resp_s)[0]
     srv_id = srv["server_id"]
-
     hetzner.delete_volume(srv["hetzner_volume_id"])
 
     subdomains_to_delete = set()
-    status_dns, resp_dns = supabase.supabase_client_request(f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain", method="GET")
+    status_dns, resp_dns = supabase.supabase_client_request(
+        f"dim_dns_records?server_id=eq.{srv_id}&select=subdomain", method="GET"
+    )
     if status_dns == 200:
         for d in json.loads(resp_dns):
             if d.get("subdomain"):
                 subdomains_to_delete.add(dns.environment_subdomain(d["subdomain"]))
 
     subdomains_to_delete.add(dns.environment_subdomain(raw_slug))
-
     for sub in subdomains_to_delete:
         if sub and sub != "mc":
             dns.delete_godaddy_dns(sub)
@@ -311,15 +443,17 @@ def handle_server_delete(payload: dict) -> tuple[int, dict]:
         method="PATCH",
         data={"status": "deleted", "deleted_at": now_iso},
     )
-    return 200, {"message": f"Server '{srv['display_name']}' und zugehörige DNS-Einträge gelöscht"}
 
+    return 200, {"message": f"Server '{srv['display_name']}' und zugehörige DNS-Einträge gelöscht"}
 
 
 def handle_log(payload: dict) -> tuple[int, dict]:
     raw_mode = str(payload.get("mode", payload.get("logging", "game"))).strip().lower()
     game = str(payload.get("game", "minecraft")).strip().lower()
-    server_slug = resolve_server_slug(payload.get("server_name") or payload.get("server_slug") or payload.get("server") or payload.get("name"), game=game)
-
+    server_slug = resolve_server_slug(
+        payload.get("server_name") or payload.get("server_slug") or payload.get("server") or payload.get("name"),
+        game=game
+    )
     mode = "none" if raw_mode in ["off", "none", "false", "0"] else raw_mode
     if mode not in ["all", "game", "none"]:
         mode = "game"
@@ -344,11 +478,10 @@ def handle_log(payload: dict) -> tuple[int, dict]:
     live_synced = False
     active_servers = hetzner.list_servers()
     matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
-
     if matched_vm and matched_vm.get("ip"):
         try:
             agent_mode = "off" if mode == "none" else mode
-            res_agent = agent.toggle_remote_logging(matched_vm["ip"], mode=agent_mode)
+            agent.toggle_remote_logging(matched_vm["ip"], mode=agent_mode)
             live_synced = True
         except Exception as e:
             print(f"[LOG SYNC ERROR] {e}")
@@ -363,8 +496,10 @@ def handle_log(payload: dict) -> tuple[int, dict]:
 
 def handle_server_reload_files(payload: dict) -> tuple[int, dict]:
     game = str(payload.get("game", "minecraft")).strip().lower()
-    raw_slug = resolve_server_slug(payload.get("server_name") or payload.get("server") or payload.get("name"), game=game)
-
+    raw_slug = resolve_server_slug(
+        payload.get("server_name") or payload.get("server") or payload.get("name"),
+        game=game
+    )
     status_s, resp_s = supabase.supabase_client_request(
         f"dim_servers?game=eq.{game}&server_slug=eq.{raw_slug}&status=neq.deleted",
         method="GET",
@@ -374,7 +509,6 @@ def handle_server_reload_files(payload: dict) -> tuple[int, dict]:
 
     srv = json.loads(resp_s)[0]
     vm_full_name = srv.get("full_name")
-
     active_servers = hetzner.list_servers()
     matched_vm = next((s for s in active_servers if s.get("name") == vm_full_name), None)
 
@@ -388,4 +522,3 @@ def handle_server_reload_files(payload: dict) -> tuple[int, dict]:
             "details": res_agent,
         }
     return 500, {"error": f"Reload fehlgeschlagen: {res_agent.get('error', res_agent.get('message'))}"}
-

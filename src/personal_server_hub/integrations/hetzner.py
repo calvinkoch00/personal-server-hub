@@ -147,6 +147,28 @@ def get_server_status(server_id: str) -> dict:
         "ip": server.get("public_net", {}).get("ipv4", {}).get("ip")
     }
 
+def get_server_by_name(name: str) -> dict | None:
+    """Sucht einen Hetzner-Server anhand seines Namens."""
+    import urllib.parse
+    res = _request(f"servers?name={urllib.parse.quote(name)}", method="GET")
+    servers = res.get("servers", [])
+    if servers:
+        s = servers[0]
+        return {
+            "server_id": s.get("id"),
+            "name": s.get("name"),
+            "status": s.get("status"),
+            "ip": s.get("public_net", {}).get("ipv4", {}).get("ip"),
+            "server_type": s.get("server_type", {}).get("name"),
+            "created": s.get("created")
+        }
+    return None
+
+def power_on_server(server_id: str | int) -> dict:
+    """Schaltet einen bestehenden Server ein."""
+    res = _request(f"servers/{server_id}/actions/poweron", method="POST")
+    return res.get("action", {})
+
 def delete_server(server_id: str) -> dict:
     res = _request(f"servers/{server_id}", method="DELETE")
     return {"message": "Server wird gelöscht", "action": res.get("action")}
