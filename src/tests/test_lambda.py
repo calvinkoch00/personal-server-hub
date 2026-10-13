@@ -8,7 +8,7 @@ from personal_server_hub.lambda_function import lambda_handler
 # 1. Security Gatekeeper Test
 def test_unauthorized_request():
     event = {
-        "rawPath": "/start",
+        "rawPath": "/server/start",
         "headers": {"x-auth-token": "invalid-token"},
         "body": json.dumps({"game": "minecraft"})
     }
@@ -35,13 +35,13 @@ def test_start_endpoint_success(mock_create, auth_headers):
 
     event = {
         "version": "2.0",
-        "rawPath": "/start",
+        "rawPath": "/server/start",
         "rawQueryString": "",
         "headers": {**auth_headers, "content-type": "application/json"},
         "requestContext": {
             "http": {
                 "method": "POST",
-                "path": "/start",
+                "path": "/server/start",
                 "protocol": "HTTP/1.1",
                 "sourceIp": "127.0.0.1",
                 "userAgent": "pytest",
@@ -266,13 +266,13 @@ def test_stop_server_endpoint(mock_list, mock_delete, mock_sb, auth_headers):
 
     event = {
         "version": "2.0",
-        "rawPath": "/stop",
+        "rawPath": "/server/stop",
         "rawQueryString": "",
         "headers": {**auth_headers, "content-type": "application/json"},
         "requestContext": {
             "http": {
                 "method": "POST",
-                "path": "/stop",
+                "path": "/server/stop",
                 "protocol": "HTTP/1.1",
                 "sourceIp": "127.0.0.1",
                 "userAgent": "pytest",
@@ -356,7 +356,7 @@ def test_discord_button_is_deferred_as_message_update(mock_invoke, _mock_verify,
     assert json.loads(response["body"]) == {"type": 6}
 
 
-@patch("personal_server_hub.lambda_function.discord_api.execute_async_command")
+@patch("personal_server_hub.lambda_function.execute_async_command")
 def test_async_worker_executes_queued_interaction(mock_execute):
     event = {
         "async_worker": True,

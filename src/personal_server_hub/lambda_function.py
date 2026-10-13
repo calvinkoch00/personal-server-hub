@@ -9,7 +9,9 @@ load_runtime_secrets()
 
 from personal_server_hub.security import is_authorized, verify_discord_signature
 from personal_server_hub.api.main import app
-import personal_server_hub.discord_api as discord_api
+from personal_server_hub.adapters.discord.formatter import format_message
+from personal_server_hub.adapters.discord.dispatcher import handle_interaction
+from personal_server_hub.adapters.discord.webhook import execute_async_command
 
 AWS_REGION = os.environ.get("AWS_REGION", "eu-central-1")
 lambda_client = boto3.client("lambda", region_name=AWS_REGION)
@@ -30,7 +32,7 @@ def lambda_handler(event, context):
     # 0. Asynchroner Worker-Eingang
     if event.get("async_worker"):
         print("[ASYNC WORKER] Starte Hintergrund-Job...")
-        discord_api.execute_async_command(
+        execute_async_command(
             command_payload=event.get("command_payload"),
             token=event.get("token"),
             app_id=event.get("app_id")
@@ -64,7 +66,7 @@ def lambda_handler(event, context):
 
             if interaction_type in (2, 3):
                 token = body_dict.get("token")
-                app_id = body_dict.get("application_id") or discord_api.DISCORD_APP_ID
+                app_id = body_dict.get("application_id") or handle_interaction.DISCORD_APP_ID
                 function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
                 if not token or not app_id or not function_name:
                     raise RuntimeError(
@@ -92,7 +94,7 @@ def lambda_handler(event, context):
                 ack_type = 6 if interaction_type == 3 else 5
                 return json_response(200, {"type": ack_type})
 
-            interaction_res = discord_api.handle_interaction(body_dict, context)
+            interaction_res = handle_interaction(body_dict, context)
             res_body = interaction_res.get("body", {})
             if isinstance(res_body, str):
                 res_body = json.loads(res_body)

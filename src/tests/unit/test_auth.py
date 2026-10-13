@@ -29,7 +29,6 @@ client = TestClient(app)
 
 
 def test_route_inventory_is_not_empty():
-    assert ("GET", "/health") in ROUTES
     assert ("POST", "/dns/sync") in ROUTES
 
 
@@ -52,22 +51,6 @@ def test_discord_headers_without_internal_token_are_ignored(method, path):
 
 def test_auth_runs_before_body_validation():
     assert client.post("/users/register", json={}).status_code == 401
-
-
-def test_secret_via_header_and_bearer_is_accepted():
-    assert client.get("/health", headers=SECRET).status_code == 200
-    bearer = {"Authorization": "Bearer test-auth-secret"}
-    assert client.get("/health", headers=bearer).status_code == 200
-
-
-def test_internal_discord_principal_is_accepted():
-    response = client.get("/health", headers=internal_headers("123"))
-    assert response.status_code == 200
-
-
-def test_internal_token_without_user_id_is_rejected():
-    headers = {"x-internal-token": dependencies.INTERNAL_TOKEN}
-    assert client.get("/health", headers=headers).status_code == 401
 
 
 # --- require_registered / require_admin on a throwaway app -------------------

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from personal_server_hub.api.discord_registry import discord_command
 
 from personal_server_hub.api.dependencies import require_registered
 from personal_server_hub.api.schemas.whitelist import (
@@ -17,18 +18,21 @@ router = APIRouter()
 
 
 @router.post("/whitelist/add", dependencies=[Depends(require_registered)])
+@discord_command("whitelist add", "/whitelist/add", method="POST")
 def whitelist_add(payload: WhitelistAddRequest) -> JSONResponse:
     status_code, response = add_whitelist(payload.model_dump())
     return JSONResponse(status_code=status_code, content=response)
 
 
 @router.post("/whitelist/remove", dependencies=[Depends(require_registered)])
+@discord_command("whitelist remove", "/whitelist/remove", method="POST")
 def whitelist_remove(payload: WhitelistRemoveRequest) -> JSONResponse:
     status_code, response = remove_whitelist(payload.model_dump())
     return JSONResponse(status_code=status_code, content=response)
 
 
 @router.post("/whitelist/list", dependencies=[Depends(require_registered)])
+@discord_command("whitelist list", "/whitelist/list", method="POST")
 def whitelist_list(payload: WhitelistListRequest) -> JSONResponse:
     status_code, response = list_whitelist(payload.model_dump())
     return JSONResponse(status_code=status_code, content=response)

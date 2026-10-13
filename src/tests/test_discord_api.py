@@ -3,7 +3,9 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 from personal_server_hub.application.help import get_help_message
 from personal_server_hub.adapters.discord.slash_commands import slash_command_response
-import personal_server_hub.discord_api as discord_api
+from personal_server_hub.adapters.discord.dispatcher import handle_interaction
+from personal_server_hub.adapters.discord import webhook
+from personal_server_hub.adapters.discord.webhook import execute_async_command, split_discord_content
 
 
 def test_slash_command_adapter_wraps_discord_message_data():
@@ -16,7 +18,7 @@ def test_slash_command_adapter_wraps_discord_message_data():
 
 
 def test_discord_help_command_uses_application_help():
-    response = discord_api.handle_interaction(
+    response = handle_interaction(
         {"type": 2, "data": {"name": "help"}}
     )
 
@@ -25,13 +27,13 @@ def test_discord_help_command_uses_application_help():
 
 
 def test_handle_interaction_ping():
-    res = discord_api.handle_interaction({"type": 1})
+    res = handle_interaction({"type": 1})
     assert res["statusCode"] == 200
     assert res["body"]["type"] == 1
 
 
 def test_handle_interaction_unsupported():
-    res = discord_api.handle_interaction({"type": 99})
+    res = handle_interaction({"type": 99})
     assert res["statusCode"] == 400
     assert "Unsupported" in res["body"]["error"]
 
@@ -61,7 +63,7 @@ def test_handle_interaction_server_subcommand_start(mock_get_role, mock_start):
         }
     }
 
-    res = discord_api.handle_interaction(payload)
+    res = handle_interaction(payload)
     assert res["statusCode"] == 200
     assert res["body"]["data"]["content"] == "Server wird gestartet..."
     assert mock_start.called
@@ -91,7 +93,7 @@ def test_handle_interaction_server_subcommand_status(mock_get_role, mock_handle_
         }
     }
 
-    res = discord_api.handle_interaction(payload)
+    res = handle_interaction(payload)
     assert res["statusCode"] == 200
     assert "minecraft-test-2" in res["body"]["data"]["content"]
     assert "online" in res["body"]["data"]["content"]
@@ -123,7 +125,7 @@ def test_handle_interaction_whitelist_subcommand(mock_get_role, mock_wl):
         }
     }
 
-    res = discord_api.handle_interaction(payload)
+    res = handle_interaction(payload)
     assert res["statusCode"] == 200
     assert "Whitelist aktualisiert" in res["body"]["data"]["content"]
     mock_wl.assert_called_once_with(
@@ -165,7 +167,7 @@ def test_addgameaccount_command_uses_shared_application_operation(mock_get_role,
         },
     }
 
-    response = discord_api.handle_interaction(payload)
+    response = handle_interaction(payload)
 
     assert "created" in response["body"]["data"]["content"]
     mock_add_game_account.assert_called_once_with(
@@ -178,8 +180,8 @@ def test_addgameaccount_command_uses_shared_application_operation(mock_get_role,
     )
 
 
-@patch("personal_server_hub.discord_api.urllib.request.urlopen")
-@patch("personal_server_hub.discord_api.handle_interaction")
+@patch("personal_server_hub.adapters.discord.webhook.urllib.request.urlopen")
+@patch("personal_server_hub.adapters.discord.webhook.handle_interaction")
 def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
     mock_interaction.return_value = {
         "statusCode": 200,
@@ -189,7 +191,7 @@ def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
     response.__enter__.return_value = response
     mock_urlopen.return_value = response
 
-    discord_api.execute_async_command(
+    execute_async_command(
         {"type": 2, "data": {"name": "status"}},
         token="interaction-token",
         app_id="123456789"
@@ -215,22 +217,22 @@ def test_execute_async_command_posts_followup(mock_interaction, mock_urlopen):
     assert json.loads(final_request.data) == {"content": "Server gestartet"}
 
 
-@patch("personal_server_hub.discord_api.urllib.request.urlopen")
+@patch("personal_server_hub.adapters.discord.webhook.urllib.request.urlopen")
 def test_execute_help_splits_content_within_discord_limit(mock_urlopen):
     response = MagicMock()
     response.__enter__.return_value = response
     mock_urlopen.return_value = response
 
     command_payload = {"type": 2, "data": {"name": "help"}}
-    expected_content = discord_api.handle_interaction(command_payload)["body"]["data"]["content"]
+    expected_content = handle_interaction(command_payload)["body"]["data"]["content"]
 
-    discord_api.execute_async_command(
+    execute_async_command(
         command_payload,
         token="interaction-token",
         app_id="123456789"
     )
 
-    assert len(expected_content) > discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    assert len(expected_content) > webhook.DISCORD_MESSAGE_CONTENT_LIMIT
     assert mock_urlopen.call_count == 3
     progress_request = mock_urlopen.call_args_list[0].args[0]
     first_result_request = mock_urlopen.call_args_list[1].args[0]
@@ -243,15 +245,15 @@ def test_execute_help_splits_content_within_discord_limit(mock_urlopen):
         json.loads(first_result_request.data)["content"],
         json.loads(second_result_request.data)["content"]
     ]
-    assert all(len(chunk) <= discord_api.DISCORD_MESSAGE_CONTENT_LIMIT for chunk in result_chunks)
+    assert all(len(chunk) <= webhook.DISCORD_MESSAGE_CONTENT_LIMIT for chunk in result_chunks)
     assert "".join(result_chunks) == expected_content
 
 
 def test_split_discord_content_prefers_paragraph_break():
-    limit = discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    limit = webhook.DISCORD_MESSAGE_CONTENT_LIMIT
     content = "a" * 1780 + "\n\n" + "b" * 180 + "\n" + "c" * 100
 
-    chunks = discord_api.split_discord_content(content)
+    chunks = split_discord_content(content)
 
     assert chunks[0] == "a" * 1780 + "\n\n"
     assert "".join(chunks) == content
@@ -259,10 +261,10 @@ def test_split_discord_content_prefers_paragraph_break():
 
 
 def test_split_discord_content_prefers_line_break_over_whitespace():
-    limit = discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    limit = webhook.DISCORD_MESSAGE_CONTENT_LIMIT
     content = "a" * 1000 + "\n" + "b" * 500 + " " + "c" * 600
 
-    chunks = discord_api.split_discord_content(content)
+    chunks = split_discord_content(content)
 
     assert chunks[0] == "a" * 1000 + "\n"
     assert "".join(chunks) == content
@@ -270,22 +272,22 @@ def test_split_discord_content_prefers_line_break_over_whitespace():
 
 
 def test_split_discord_content_falls_back_to_whitespace_then_hard_limit():
-    limit = discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    limit = webhook.DISCORD_MESSAGE_CONTENT_LIMIT
     content = "a" * 1000 + "\t" + "b" * 1500
 
-    chunks = discord_api.split_discord_content(content)
+    chunks = split_discord_content(content)
 
     assert chunks[0] == "a" * 1000 + "\t"
     assert "".join(chunks) == content
     assert all(len(chunk) <= limit for chunk in chunks)
 
     unbroken_content = "x" * (limit + 10)
-    unbroken_chunks = discord_api.split_discord_content(unbroken_content)
+    unbroken_chunks = split_discord_content(unbroken_content)
     assert unbroken_chunks == ["x" * limit, "x" * 10]
 
 
-@patch("personal_server_hub.discord_api.urllib.request.urlopen")
-@patch("personal_server_hub.discord_api.handle_interaction")
+@patch("personal_server_hub.adapters.discord.webhook.urllib.request.urlopen")
+@patch("personal_server_hub.adapters.discord.webhook.handle_interaction")
 def test_execute_async_component_updates_original_message(mock_interaction, mock_urlopen):
     mock_interaction.return_value = {
         "statusCode": 200,
@@ -295,7 +297,7 @@ def test_execute_async_component_updates_original_message(mock_interaction, mock
     response.__enter__.return_value = response
     mock_urlopen.return_value = response
 
-    discord_api.execute_async_command(
+    execute_async_command(
         {"type": 3, "data": {"custom_id": "cancel_del:123"}},
         token="interaction-token",
         app_id="123456789"
