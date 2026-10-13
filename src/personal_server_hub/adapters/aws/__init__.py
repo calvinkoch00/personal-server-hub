@@ -1,0 +1,1 @@
+from personal_server_hub.adapters.aws.handler import lambda_handler
