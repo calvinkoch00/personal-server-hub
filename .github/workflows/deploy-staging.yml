@@ -135,7 +135,6 @@ jobs:
       - name: Package Lambda
         run: |
           cp -R src/personal_server_hub ./package/personal_server_hub
-          printf '%s\n' 'from personal_server_hub.lambda_function import lambda_handler' > ./package/lambda_function.py
           (cd package && zip -qr ../deployment_package.zip .)
 
       - name: Deploy staging Lambda code
@@ -152,6 +151,6 @@ jobs:
         run: |
           aws lambda update-function-configuration \
             --function-name personal-server-hub-api-staging \
-            --handler personal_server_hub.lambda_function.lambda_handler \
+            --handler personal_server_hub.adapters.aws.handler.lambda_handler \
             --environment "Variables={APP_SECRETS_ARN=$LAMBDA_RUNTIME_SECRET_ARN,SECRET_VERSION_ID=$SECRET_VERSION_ID}"
           aws lambda wait function-updated --function-name personal-server-hub-api-staging
