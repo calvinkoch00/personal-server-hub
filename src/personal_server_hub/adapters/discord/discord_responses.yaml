@@ -4,6 +4,8 @@ status_templates:
   server_list_header: "🟢 **Registrierte Server:**"
   server_list_empty: "⚪ Keine registrierten Server vorhanden."
   server_item: "• **{name}** (`{status}`) — IP: `{ip}`"
+  server_status_unknown: "unknown"
+  server_ip_offline: "offline"
 
 status_codes:
   200: "✅"
@@ -13,8 +15,43 @@ status_codes:
   403: "⛔ Keine Berechtigung"
   404: "🔍 Nicht gefunden"
   500: "❌ Interner Serverfehler"
+  default: "ℹ️"
 
 command_messages:
+  help: |-
+    📖 **Server Hub – Anleitung & Befehle**
+
+    **1️⃣ Einem bestehenden Server beitreten (Schritt-für-Schritt):**
+    1. Account einmalig registrieren: `/addgameaccount game: minecraft username: <DeinIngameName>`
+    2. Whitelist prüfen/hinzufügen: `/whitelist add username: <DeinIngameName> server: <ServerName>`
+    3. Server starten: `/server start name: <ServerName> duration: 2h`
+    4. In Minecraft direkt verbinden mit der Domain aus der Startmeldung (z. B. `<subdomain>.calvinkoch.ch`).
+
+    **2️⃣ Einen neuen Server erstellen & beitreten:**
+    1. Account verknüpfen: `/addgameaccount game: minecraft username: <DeinIngameName>`
+    2. Server anlegen: `/server create name: <Name> subdomain: <WunschDomain>`
+       *(Deine verknüpften Accounts werden automatisch als Admin gewhitelistet!)*
+    3. Freunde hinzufügen: `/whitelist add username: <Freund> server: <Name>`
+    4. Server starten & losspielen: `/server start name: <Name> duration: 4h`
+
+    📋 **Verfügbare Befehle:**
+    • `/server start [name] [duration] [log]` — Startet einen Server
+    • `/server stop [name]` — Stoppt einen laufenden Server und setzt DNS zurück
+    • `/server reload-files <server>` — Aktualisiert Agenten-Dateien ohne Downtime
+    • `/server status` — Zeigt alle registrierten Server und deren Status
+    • `/server create <name> [game] [subdomain]` — Erstellt ein neues Server-Volume
+    • `/server delete <server>` — Löscht einen Server nach 2-Stufen-Bestätigung
+    • `/whitelist add <username> <server> [role]` — Spieler hinzufügen / Rolle anpassen
+    • `/whitelist remove <username> <server>` — Spieler von Whitelist entfernen
+    • `/whitelist list <server>` — Zeigt gewhitelistete Spieler eines Servers
+    • `/status` — Zeigt laufende Instanzen samt Live-IP
+    • `/log <mode> [server]` — Live-Logs umschalten (`game`, `all`, `off`)
+    • `/costs [timeframe] [user]` — Kosten und Spielzeiten einsehen
+    • `/account [user]` — Guthaben und Saldo anzeigen
+    • `/cash add <user> <amount> [currency] [note]` — Guthaben buchen (Admin)
+    • `/addgameaccount <game> <username>` — Ingame-Account mit Discord koppeln
+    • `/help` — Zeigt diese Anleitung an
+  
   unknown_command: "Unbekannter Befehl: `/{command}`"
   server_unknown: "Unbekannter Server-Befehl."
   async_received: "✅ Befehl empfangen – ich versuche ihn auszuführen…"
@@ -22,3 +59,4 @@ command_messages:
   delete_cancelled: "❌ Löschvorgang abgebrochen. Es wurden keine Daten gelöscht."
   delete_unauthorized: "⛔ Nur der Ersteller des Befehls kann abbrechen."
   delete_not_allowed: "⛔ Du bist nicht berechtigt, diese Aktion zu bestätigen."
+  delete_success: "🗑️ {message}"

@@ -1,33 +1,4 @@
 def get_help_message() -> str:
-    return (
-        "📖 **Server Hub – Anleitung & Befehle**\n\n"
-        "**1️⃣ Einem bestehenden Server beitreten (Schritt-für-Schritt):**\n"
-        "1. Account einmalig registrieren: `/addgameaccount game: minecraft username: <DeinIngameName>`\n"
-        "2. Whitelist prüfen/hinzufügen: `/whitelist add username: <DeinIngameName> server: <ServerName>`\n"
-        "3. Server starten: `/server start name: <ServerName> duration: 2h`\n"
-        "4. In Minecraft direkt verbinden mit der Domain aus der Startmeldung (z. B. `<subdomain>.calvinkoch.ch`).\n\n"
-        "**2️⃣ Einen neuen Server erstellen & beitreten:**\n"
-        "1. Account verknüpfen: `/addgameaccount game: minecraft username: <DeinIngameName>`\n"
-        "2. Server anlegen: `/server create name: <Name> subdomain: <WunschDomain>`\n"
-        "   *(Deine verknüpften Accounts werden automatisch als Admin gewhitelistet!)*\n"
-        "3. Freunde hinzufügen: `/whitelist add username: <Freund> server: <Name>`\n"
-        "4. Server starten & losspielen: `/server start name: <Name> duration: 4h`\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📋 **Verfügbare Befehle:**\n"
-        "• `/server start [name] [duration] [log]` — Startet einen Server\n"
-        "• `/server stop [name]` — Stoppt einen laufenden Server und setzt DNS zurück\n"
-        "• `/server reload-files <server>` — Aktualisiert Agenten-Dateien ohne Downtime\n"
-        "• `/server status` — Zeigt alle registrierten Server und deren Status\n"
-        "• `/server create <name> [game] [subdomain]` — Erstellt ein neues Server-Volume\n"
-        "• `/server delete <server>` — Löscht einen Server nach 2-Stufen-Bestätigung\n"
-        "• `/whitelist add <username> <server> [role]` — Spieler hinzufügen / Rolle anpassen\n"
-        "• `/whitelist remove <username> <server>` — Spieler von Whitelist entfernen\n"
-        "• `/whitelist list <server>` — Zeigt gewhitelistete Spieler eines Servers\n"
-        "• `/status` — Zeigt laufende Instanzen samt Live-IP\n"
-        "• `/log <mode> [server]` — Live-Logs umschalten (`game`, `all`, `off`)\n"
-        "• `/costs [timeframe] [user]` — Kosten und Spielzeiten einsehen\n"
-        "• `/account [user]` — Guthaben und Saldo anzeigen\n"
-        "• `/cash add <user> <amount> [currency] [note]` — Guthaben buchen (Admin)\n"
-        "• `/addgameaccount <game> <username>` — Ingame-Account mit Discord koppeln\n"
-        "• `/help` — Zeigt diese Anleitung an"
-    )
+    from personal_server_hub.adapters.discord.formatter import format_message
+
+    return format_message("help")

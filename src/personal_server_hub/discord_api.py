@@ -8,7 +8,6 @@ from personal_server_hub.api.main import app
 from personal_server_hub.api.dependencies import internal_headers
 from personal_server_hub.adapters.discord.slash_commands import slash_command_response
 from personal_server_hub.adapters.discord.formatter import format_server_list, format_message
-from personal_server_hub.application.help import get_help_message
 
 DISCORD_APP_ID = os.environ.get("DISCORD_APPLICATION_ID")
 DISCORD_MESSAGE_CONTENT_LIMIT = 2000
@@ -36,13 +35,22 @@ def handle_interaction(body: dict, context=None) -> dict:
             if target_caller != caller_id:
                 return {
                     "statusCode": 200,
-                    "body": {"type": 4, "data": {"content": "⛔ Nur der Ersteller des Befehls kann abbrechen.", "flags": 64}}
+                    "body": {
+                        "type": 4,
+                        "data": {
+                            "content": format_message("delete_unauthorized"),
+                            "flags": 64,
+                        },
+                    }
                 }
             return {
                 "statusCode": 200,
                 "body": {
                     "type": 7,
-                    "data": {"content": "❌ Löschvorgang abgebrochen. Es wurden keine Daten gelöscht.", "components": []}
+                    "data": {
+                        "content": format_message("delete_cancelled"),
+                        "components": [],
+                    },
                 }
             }
 
@@ -54,7 +62,13 @@ def handle_interaction(body: dict, context=None) -> dict:
             if target_caller != caller_id:
                 return {
                     "statusCode": 200,
-                    "body": {"type": 4, "data": {"content": "⛔ Du bist nicht berechtigt, diese Aktion zu bestätigen.", "flags": 64}}
+                    "body": {
+                        "type": 4,
+                        "data": {
+                            "content": format_message("delete_not_allowed"),
+                            "flags": 64,
+                        },
+                    }
                 }
 
             from personal_server_hub.application.servers import handle_server_delete
@@ -68,7 +82,10 @@ def handle_interaction(body: dict, context=None) -> dict:
                 "statusCode": 200,
                 "body": {
                     "type": 7,
-                    "data": {"content": f"🗑️ {msg}", "components": []}
+                    "data": {
+                        "content": format_message("delete_success", message=msg),
+                        "components": [],
+                    }
                 }
             }
 
@@ -90,7 +107,7 @@ def handle_interaction(body: dict, context=None) -> dict:
     response_content = ""
 
     if command == "help":
-        response_content = get_help_message()
+        response_content = format_message("help")
     elif command == "status":
         res = client.get("/servers", headers=headers)
         resp = res.json()
@@ -121,7 +138,7 @@ def handle_interaction(body: dict, context=None) -> dict:
             resp = res.json()
             response_content = resp.get("message") or resp.get("status") or str(resp)
         else:
-            response_content = format_message("server_unknown", "Unbekannter Server-Befehl.")
+            response_content = format_message("server_unknown")
     elif command == "whitelist":
         res = client.post(f"/whitelist/{subcommand}", json={**sub_options, "discord_user_id": caller_id}, headers=headers)
         resp = res.json()
@@ -148,7 +165,7 @@ def handle_interaction(body: dict, context=None) -> dict:
         resp = res.json()
         response_content = resp.get("message") or resp.get("status") or str(resp)
     else:
-        response_content = format_message("unknown_command", f"Unbekannter Befehl: `/{command}`", command=command)
+        response_content = format_message("unknown_command", command=command)
 
     return slash_command_response({"content": response_content})
 
@@ -156,10 +173,24 @@ def handle_interaction(body: dict, context=None) -> dict:
 def split_discord_content(content: str) -> list[str]:
     chunks = []
     while len(content) > DISCORD_MESSAGE_CONTENT_LIMIT:
-        split_at = content.rfind("\n", 0, DISCORD_MESSAGE_CONTENT_LIMIT)
-        if split_at < 0:
-            split_at = content.rfind(" ", 0, DISCORD_MESSAGE_CONTENT_LIMIT)
-        split_at = split_at + 1 if split_at > 0 else DISCORD_MESSAGE_CONTENT_LIMIT
+        limit = DISCORD_MESSAGE_CONTENT_LIMIT
+        paragraph_break = content.rfind("\n\n", 0, limit)
+        if 0 < paragraph_break and paragraph_break + 2 <= limit:
+            split_at = paragraph_break + 2
+        else:
+            line_break = content.rfind("\n", 0, limit)
+            if line_break > 0:
+                split_at = line_break + 1
+            else:
+                whitespace = next(
+                    (
+                        index
+                        for index in range(limit - 1, 0, -1)
+                        if content[index].isspace()
+                    ),
+                    -1,
+                )
+                split_at = whitespace + 1 if whitespace > 0 else limit
         chunks.append(content[:split_at])
         content = content[split_at:]
 
@@ -201,7 +232,7 @@ def execute_async_command(command_payload: dict, token: str, app_id: str) -> Non
         send_webhook_request(
             original_response_url,
             "PATCH",
-            {"content": "✅ Befehl empfangen – ich versuche ihn auszuführen…"}
+            {"content": format_message("async_received")}
         )
 
     try:
@@ -224,7 +255,7 @@ def execute_async_command(command_payload: dict, token: str, app_id: str) -> Non
         print(f"[DISCORD COMMAND ERROR] {e}")
         response_type = 4
         response_data = {
-            "content": "❌ Der Befehl konnte nicht ausgeführt werden. Bitte prüfe die Server-Logs.",
+            "content": format_message("async_error"),
             "flags": 64
         }
 

@@ -247,6 +247,43 @@ def test_execute_help_splits_content_within_discord_limit(mock_urlopen):
     assert "".join(result_chunks) == expected_content
 
 
+def test_split_discord_content_prefers_paragraph_break():
+    limit = discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    content = "a" * 1780 + "\n\n" + "b" * 180 + "\n" + "c" * 100
+
+    chunks = discord_api.split_discord_content(content)
+
+    assert chunks[0] == "a" * 1780 + "\n\n"
+    assert "".join(chunks) == content
+    assert all(len(chunk) <= limit for chunk in chunks)
+
+
+def test_split_discord_content_prefers_line_break_over_whitespace():
+    limit = discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    content = "a" * 1000 + "\n" + "b" * 500 + " " + "c" * 600
+
+    chunks = discord_api.split_discord_content(content)
+
+    assert chunks[0] == "a" * 1000 + "\n"
+    assert "".join(chunks) == content
+    assert all(len(chunk) <= limit for chunk in chunks)
+
+
+def test_split_discord_content_falls_back_to_whitespace_then_hard_limit():
+    limit = discord_api.DISCORD_MESSAGE_CONTENT_LIMIT
+    content = "a" * 1000 + "\t" + "b" * 1500
+
+    chunks = discord_api.split_discord_content(content)
+
+    assert chunks[0] == "a" * 1000 + "\t"
+    assert "".join(chunks) == content
+    assert all(len(chunk) <= limit for chunk in chunks)
+
+    unbroken_content = "x" * (limit + 10)
+    unbroken_chunks = discord_api.split_discord_content(unbroken_content)
+    assert unbroken_chunks == ["x" * limit, "x" * 10]
+
+
 @patch("personal_server_hub.discord_api.urllib.request.urlopen")
 @patch("personal_server_hub.discord_api.handle_interaction")
 def test_execute_async_component_updates_original_message(mock_interaction, mock_urlopen):
